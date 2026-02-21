@@ -5,5 +5,5 @@
     "lib": ["es2022", "dom"],
     "types": ["react", "react-native"]
   },
-  "include": ["app/**/*.ts", "app/**/*.tsx", "src/**/*.ts", "src/**/*.tsx"]
+  "include": ["app/**/*.ts", "app/**/*.tsx", "src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts"]
 }

@@ -1,5 +1,5 @@
 import path from "node:path";
-import * as XLSX from "xlsx";
+import XLSX from "xlsx";
 import { z } from "zod";
 import type { IngredientCatalogRow, RecipeLineRow, SkuMasterRow, SOTParseResult, ValidationError } from "./types.js";
 

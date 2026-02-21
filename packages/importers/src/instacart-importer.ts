@@ -1,5 +1,5 @@
 import path from "node:path";
-import * as XLSX from "xlsx";
+import XLSX from "xlsx";
 import type { IngredientCatalogRow, InstacartOrderRow } from "./types.js";
 
 export function parseInstacartOrders(filePath: string): InstacartOrderRow[] {
@@ -12,27 +12,93 @@ export function parseInstacartOrders(filePath: string): InstacartOrderRow[] {
 
   return rows
     .map((row) => {
-      const productName = String(row.product_name || row.name || "").trim();
+      const productName = pickString(row, ["product_name", "name", "Item Name", "item_name"]);
       if (!productName) return null;
 
-      const orderedAtRaw = row.ordered_at || row.date || new Date().toISOString();
-      const orderedAt = new Date(String(orderedAtRaw));
+      const orderedAtRaw =
+        pickString(row, ["ordered_at", "date", "Delivered At", "Delivery Created At"]) || new Date().toISOString();
+      const orderedAt = parseDateLoose(orderedAtRaw);
 
-      const qty = Number(row.qty || row.quantity || 1);
-      const unit = String(row.unit || "ea");
-      const gramsPerUnit = Number(row.grams_per_unit || row.grams || 1000);
+      const qty = pickNumber(row, ["qty", "quantity", "Picked Quantity", "Ordered Quantity"], 1);
+      const unit = pickString(row, ["unit", "Cost Unit", "cost_unit"]) || "ea";
+      const gramsPerUnit = resolveGramsPerUnit(row, unit, qty);
 
       return {
         orderedAt,
         productName,
-        brand: String(row.brand || "").trim() || null,
-        upc: String(row.upc || "").trim() || null,
+        brand: pickString(row, ["brand", "Brand Name", "brand_name"]) || null,
+        upc: pickString(row, ["upc", "UPC", "Item ID", "item_id"]) || null,
         qty: Number.isFinite(qty) ? qty : 1,
         unit,
         gramsPerUnit: Number.isFinite(gramsPerUnit) ? gramsPerUnit : 1000
       } satisfies InstacartOrderRow;
     })
     .filter((x): x is InstacartOrderRow => x !== null);
+}
+
+function pickString(row: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = row[key];
+    if (value === null || value === undefined) continue;
+    const parsed = String(value).trim();
+    if (parsed.length > 0) return parsed;
+  }
+  return "";
+}
+
+function pickNumber(row: Record<string, unknown>, keys: string[], fallback: number): number {
+  for (const key of keys) {
+    const value = row[key];
+    if (value === null || value === undefined || value === "") continue;
+    const parsed = Number(String(value).replace(/,/g, "").trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function parseDateLoose(input: string): Date {
+  const direct = new Date(input);
+  if (!Number.isNaN(direct.getTime())) return direct;
+
+  // Instacart exports often use timezone abbreviations (e.g. EST) that can fail in some runtimes.
+  const withoutTzAbbrev = input.replace(/\s+[A-Z]{2,5}$/, "");
+  const fallback = new Date(withoutTzAbbrev);
+  if (!Number.isNaN(fallback.getTime())) return fallback;
+
+  return new Date();
+}
+
+function resolveGramsPerUnit(row: Record<string, unknown>, unitRaw: string, qty: number): number {
+  const direct = pickNumber(row, ["grams_per_unit", "grams"], Number.NaN);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+
+  const normalizedUnit = unitRaw.toLowerCase().trim();
+  const weightValue = pickNumber(row, ["Picked Weight", "Ordered Weight", "picked_weight", "ordered_weight"], Number.NaN);
+  const weightMultiplier = gramsMultiplierForUnit(normalizedUnit);
+  if (Number.isFinite(weightValue) && weightValue > 0 && weightMultiplier && qty > 0) {
+    return (weightValue * weightMultiplier) / qty;
+  }
+
+  if (weightMultiplier) return weightMultiplier;
+  if (normalizedUnit === "each" || normalizedUnit === "ea" || normalizedUnit === "ct") return 100;
+  if (normalizedUnit === "fl oz") return 29.5735;
+  return 1000;
+}
+
+function gramsMultiplierForUnit(unit: string): number | null {
+  switch (unit) {
+    case "kg":
+      return 1000;
+    case "g":
+      return 1;
+    case "lb":
+    case "lbs":
+      return 453.59237;
+    case "oz":
+      return 28.3495231;
+    default:
+      return null;
+  }
 }
 
 function normalize(input: string): string[] {

@@ -10,3 +10,5 @@ coverage
 *.tsbuildinfo
 packages/db/dev.db
 packages/db/dev.db-journal
+.expo
+.tmp
