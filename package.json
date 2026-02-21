@@ -1,0 +1,34 @@
+{
+  "name": "nutrition-autopilot",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "build": "npm run -ws build",
+    "dev": "npm run -w apps/api dev",
+    "dev:web": "npm run -w apps/web dev",
+    "dev:api": "npm run -w apps/api dev",
+    "dev:worker": "npm run -w apps/api dev:worker",
+    "dev:mobile": "npm run -w apps-mobile dev",
+    "mobile:ios": "npm run -w apps-mobile ios",
+    "mobile:testflight:build": "npm run -w apps-mobile build:production",
+    "mobile:testflight:submit": "npm run -w apps-mobile submit:testflight",
+    "lint": "npm run -ws lint",
+    "test": "npm run -ws test",
+    "typecheck": "npm run -ws typecheck",
+    "db:generate": "npm run -w packages/db db:generate",
+    "db:migrate": "npm run -w packages/db db:migrate",
+    "db:seed": "npm run -w packages/db db:seed",
+    "sot:template": "npm run -w packages/importers sot:template"
+  },
+  "devDependencies": {
+    "@types/node": "22.13.10",
+    "tsx": "4.20.3",
+    "typescript": "5.8.2",
+    "vitest": "2.1.9"
+  }
+}

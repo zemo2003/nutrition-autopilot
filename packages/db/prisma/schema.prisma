@@ -1,0 +1,570 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum RoleName {
+  OWNER
+  ADMIN
+  CSO
+  OPS
+  VIEWER
+}
+
+enum NutrientSourceType {
+  MANUFACTURER
+  USDA
+  MANUAL
+  DERIVED
+}
+
+enum VerificationStatus {
+  VERIFIED
+  NEEDS_REVIEW
+  REJECTED
+}
+
+enum ScheduleStatus {
+  PLANNED
+  DONE
+  SKIPPED
+}
+
+enum LabelType {
+  SKU
+  INGREDIENT
+  PRODUCT
+  LOT
+}
+
+enum VerificationTaskType {
+  SOURCE_RETRIEVAL
+  CONSISTENCY
+  LINEAGE_INTEGRITY
+}
+
+enum VerificationTaskSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum VerificationTaskStatus {
+  OPEN
+  APPROVED
+  REJECTED
+  RESOLVED
+}
+
+enum ImportJobType {
+  SOT
+  INSTACART_ORDER
+}
+
+enum ImportJobStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  PARTIAL
+}
+
+enum ImportMode {
+  DRY_RUN
+  COMMIT
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  createdBy String   @default("system")
+  updatedAt DateTime @updatedAt
+  version   Int      @default(1)
+
+  users    User[]
+  roles    Role[]
+  clients  Client[]
+  skus     Sku[]
+  recipes  Recipe[]
+  ingredients IngredientCatalog[]
+  products ProductCatalog[]
+  inventoryLots InventoryLot[]
+  mealSchedules MealSchedule[]
+  mealServiceEvents MealServiceEvent[]
+  labelSnapshots LabelSnapshot[]
+  verificationTasks VerificationTask[]
+  importJobs ImportJob[]
+  instacartDrafts InstacartDraft[]
+}
+
+model User {
+  id             String     @id @default(cuid())
+  organizationId String
+  email          String
+  fullName       String
+  status         UserStatus @default(ACTIVE)
+  createdAt      DateTime   @default(now())
+  createdBy      String     @default("system")
+  updatedAt      DateTime   @updatedAt
+  version        Int        @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  roles        UserRole[]
+  serviceEvents MealServiceEvent[] @relation("servedByUser")
+  reviewActions VerificationReview[] @relation("reviewedByUser")
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  organizationId String
+  name        RoleName
+  description String?
+  createdAt   DateTime @default(now())
+  createdBy   String   @default("system")
+  updatedAt   DateTime @updatedAt
+  version     Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  users       UserRole[]
+
+  @@unique([organizationId, name])
+}
+
+model UserRole {
+  id        String   @id @default(cuid())
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+  createdBy String   @default("system")
+  updatedAt DateTime @updatedAt
+  version   Int      @default(1)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+}
+
+model Client {
+  id             String   @id @default(cuid())
+  organizationId String
+  fullName       String
+  externalRef    String?
+  timezone       String   @default("America/New_York")
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  createdBy      String   @default("system")
+  updatedAt      DateTime @updatedAt
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  mealSchedules MealSchedule[]
+  mealServiceEvents MealServiceEvent[]
+
+  @@index([organizationId])
+  @@unique([organizationId, externalRef])
+}
+
+model Sku {
+  id             String   @id @default(cuid())
+  organizationId String
+  code           String
+  name           String
+  servingSizeG   Float?
+  active         Boolean  @default(true)
+  notes          String?
+  createdAt      DateTime @default(now())
+  createdBy      String   @default("system")
+  updatedAt      DateTime @updatedAt
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  recipes      Recipe[]
+  mealSchedules MealSchedule[]
+  mealServiceEvents MealServiceEvent[]
+
+  @@unique([organizationId, code])
+}
+
+model Recipe {
+  id             String   @id @default(cuid())
+  organizationId String
+  skuId          String
+  name           String
+  servings       Float    @default(1)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  createdBy      String   @default("system")
+  updatedAt      DateTime @updatedAt
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sku          Sku @relation(fields: [skuId], references: [id], onDelete: Cascade)
+  lines        RecipeLine[]
+
+  @@index([organizationId, skuId])
+}
+
+model IngredientCatalog {
+  id             String   @id @default(cuid())
+  organizationId String
+  canonicalKey   String
+  name           String
+  category       String
+  defaultUnit    String   @default("g")
+  active         Boolean  @default(true)
+  allergenTags   String[]
+  createdAt      DateTime @default(now())
+  createdBy      String   @default("system")
+  updatedAt      DateTime @updatedAt
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  recipeLines RecipeLine[]
+  products ProductCatalog[]
+
+  @@unique([organizationId, canonicalKey])
+}
+
+model RecipeLine {
+  id             String   @id @default(cuid())
+  recipeId       String
+  ingredientId   String
+  lineOrder      Int
+  targetGPerServing Float
+  preparation    String?
+  required       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  createdBy      String   @default("system")
+  updatedAt      DateTime @updatedAt
+  version        Int      @default(1)
+
+  recipe     Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredient IngredientCatalog @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+  lotConsumptions LotConsumptionEvent[]
+
+  @@unique([recipeId, lineOrder])
+}
+
+model ProductCatalog {
+  id             String   @id @default(cuid())
+  organizationId String
+  ingredientId   String
+  brand          String?
+  name           String
+  upc            String?
+  vendor         String?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  createdBy      String   @default("system")
+  updatedAt      DateTime @updatedAt
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ingredient IngredientCatalog @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+  nutrients ProductNutrientValue[]
+  inventoryLots InventoryLot[]
+
+  @@index([organizationId, ingredientId])
+  @@unique([organizationId, upc])
+}
+
+model NutrientDefinition {
+  id           String   @id @default(cuid())
+  key          String   @unique
+  label        String
+  unit         String
+  displayOrder Int
+  dailyValue   Float?
+  fdaCore      Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  createdBy    String   @default("system")
+  updatedAt    DateTime @updatedAt
+  version      Int      @default(1)
+
+  productValues ProductNutrientValue[]
+}
+
+model ProductNutrientValue {
+  id             String   @id @default(cuid())
+  productId       String
+  nutrientDefinitionId String
+  valuePer100g    Float?
+  sourceType      NutrientSourceType
+  sourceRef       String
+  verificationStatus VerificationStatus @default(NEEDS_REVIEW)
+  createdAt       DateTime @default(now())
+  createdBy       String   @default("system")
+  updatedAt       DateTime @updatedAt
+  version         Int      @default(1)
+
+  product ProductCatalog @relation(fields: [productId], references: [id], onDelete: Cascade)
+  nutrientDefinition NutrientDefinition @relation(fields: [nutrientDefinitionId], references: [id], onDelete: Restrict)
+
+  @@unique([productId, nutrientDefinitionId])
+}
+
+model InventoryLot {
+  id             String   @id @default(cuid())
+  organizationId String
+  productId      String
+  lotCode        String?
+  receivedAt     DateTime
+  expiresAt      DateTime?
+  quantityReceivedG Float
+  quantityAvailableG Float
+  unitCostCents  Int?
+  sourceOrderRef String?
+  createdAt      DateTime @default(now())
+  createdBy      String   @default("system")
+  updatedAt      DateTime @updatedAt
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product ProductCatalog @relation(fields: [productId], references: [id], onDelete: Restrict)
+  lotConsumptions LotConsumptionEvent[]
+  inventoryLedger InventoryLotLedger[]
+
+  @@index([organizationId, productId])
+}
+
+model InventoryLotLedger {
+  id           String   @id @default(cuid())
+  inventoryLotId String
+  deltaG       Float
+  reason       String
+  referenceId  String?
+  occurredAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
+  createdBy    String   @default("system")
+  updatedAt    DateTime @updatedAt
+  version      Int      @default(1)
+
+  inventoryLot InventoryLot @relation(fields: [inventoryLotId], references: [id], onDelete: Cascade)
+
+  @@index([inventoryLotId, occurredAt])
+}
+
+model MealSchedule {
+  id             String         @id @default(cuid())
+  organizationId String
+  clientId       String
+  skuId          String
+  serviceDate    DateTime
+  mealSlot       String
+  status         ScheduleStatus @default(PLANNED)
+  plannedServings Float         @default(1)
+  notes          String?
+  createdAt      DateTime       @default(now())
+  createdBy      String         @default("system")
+  updatedAt      DateTime       @updatedAt
+  version        Int            @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client      Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  sku         Sku @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  serviceEvent MealServiceEvent?
+
+  @@index([organizationId, clientId, serviceDate])
+}
+
+model MealServiceEvent {
+  id               String   @id @default(cuid())
+  organizationId   String
+  clientId         String
+  skuId            String
+  mealScheduleId   String   @unique
+  servedAt         DateTime @default(now())
+  servedByUserId   String
+  scheduleStatusAtService ScheduleStatus
+  finalLabelSnapshotId String?
+  createdAt        DateTime @default(now())
+  createdBy        String   @default("system")
+  updatedAt        DateTime @updatedAt
+  version          Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  sku Sku @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  mealSchedule MealSchedule @relation(fields: [mealScheduleId], references: [id], onDelete: Restrict)
+  servedBy User @relation("servedByUser", fields: [servedByUserId], references: [id], onDelete: Restrict)
+  lotConsumptions LotConsumptionEvent[]
+  finalLabelSnapshot LabelSnapshot? @relation("finalLabel", fields: [finalLabelSnapshotId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, clientId, servedAt])
+}
+
+model LotConsumptionEvent {
+  id              String   @id @default(cuid())
+  mealServiceEventId String
+  recipeLineId    String
+  inventoryLotId  String
+  gramsConsumed   Float
+  createdAt       DateTime @default(now())
+  createdBy       String   @default("system")
+  updatedAt       DateTime @updatedAt
+  version         Int      @default(1)
+
+  mealServiceEvent MealServiceEvent @relation(fields: [mealServiceEventId], references: [id], onDelete: Cascade)
+  recipeLine RecipeLine @relation(fields: [recipeLineId], references: [id], onDelete: Restrict)
+  inventoryLot InventoryLot @relation(fields: [inventoryLotId], references: [id], onDelete: Restrict)
+
+  @@index([mealServiceEventId])
+}
+
+model LabelSnapshot {
+  id             String    @id @default(cuid())
+  organizationId String
+  labelType      LabelType
+  externalRefId  String
+  title          String
+  renderPayload  Json
+  frozenAt       DateTime?
+  createdAt      DateTime  @default(now())
+  createdBy      String    @default("system")
+  updatedAt      DateTime  @updatedAt
+  version        Int       @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  asFinalForServiceEvents MealServiceEvent[] @relation("finalLabel")
+  parentEdges LabelLineageEdge[] @relation("parentLabel")
+  childEdges LabelLineageEdge[] @relation("childLabel")
+
+  @@index([organizationId, labelType])
+}
+
+model LabelLineageEdge {
+  id                String   @id @default(cuid())
+  parentLabelId     String
+  childLabelId      String
+  edgeType          String
+  metadata          Json?
+  createdAt         DateTime @default(now())
+  createdBy         String   @default("system")
+  updatedAt         DateTime @updatedAt
+  version           Int      @default(1)
+
+  parentLabel LabelSnapshot @relation("parentLabel", fields: [parentLabelId], references: [id], onDelete: Cascade)
+  childLabel  LabelSnapshot @relation("childLabel", fields: [childLabelId], references: [id], onDelete: Cascade)
+
+  @@unique([parentLabelId, childLabelId, edgeType])
+}
+
+model VerificationTask {
+  id             String                @id @default(cuid())
+  organizationId String
+  taskType       VerificationTaskType
+  severity       VerificationTaskSeverity @default(MEDIUM)
+  status         VerificationTaskStatus @default(OPEN)
+  title          String
+  description    String
+  payload        Json
+  createdAt      DateTime @default(now())
+  createdBy      String   @default("agent")
+  updatedAt      DateTime @updatedAt
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  reviews VerificationReview[]
+
+  @@index([organizationId, status, taskType])
+}
+
+model VerificationReview {
+  id                 String   @id @default(cuid())
+  verificationTaskId String
+  reviewedByUserId   String
+  decision           String
+  notes              String?
+  createdAt          DateTime @default(now())
+  createdBy          String   @default("system")
+  updatedAt          DateTime @updatedAt
+  version            Int      @default(1)
+
+  task VerificationTask @relation(fields: [verificationTaskId], references: [id], onDelete: Cascade)
+  reviewedBy User @relation("reviewedByUser", fields: [reviewedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([verificationTaskId])
+}
+
+model ImportJob {
+  id             String        @id @default(cuid())
+  organizationId String
+  jobType        ImportJobType
+  mode           ImportMode
+  status         ImportJobStatus @default(RUNNING)
+  sourceFileName String
+  sourceChecksum String
+  summary        Json?
+  createdAt      DateTime @default(now())
+  createdBy      String   @default("system")
+  updatedAt      DateTime @updatedAt
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  errors ImportJobError[]
+
+  @@index([organizationId, jobType, status])
+}
+
+model ImportJobError {
+  id          String   @id @default(cuid())
+  importJobId String
+  sheetName   String?
+  rowNumber   Int?
+  errorCode   String
+  message     String
+  createdAt   DateTime @default(now())
+  createdBy   String   @default("system")
+  updatedAt   DateTime @updatedAt
+  version     Int      @default(1)
+
+  importJob ImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+
+  @@index([importJobId])
+}
+
+model IdempotencyKey {
+  id            String   @id @default(cuid())
+  key           String   @unique
+  scope         String
+  requestHash   String
+  responseBody  Json?
+  expiresAt     DateTime?
+  createdAt     DateTime @default(now())
+  createdBy     String   @default("system")
+  updatedAt     DateTime @updatedAt
+  version       Int      @default(1)
+}
+
+model InstacartDraft {
+  id              String   @id @default(cuid())
+  organizationId  String
+  generatedAt     DateTime @default(now())
+  horizonHours    Int      @default(72)
+  draftPayload    Json
+  linkBundle      Json
+  status          String   @default("DRAFT")
+  createdAt       DateTime @default(now())
+  createdBy       String   @default("system")
+  updatedAt       DateTime @updatedAt
+  version         Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, generatedAt])
+}

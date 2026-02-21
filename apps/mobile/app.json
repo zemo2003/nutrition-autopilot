@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "Nutrition Autopilot",
+    "slug": "nutrition-autopilot",
+    "scheme": "nutritionautopilot",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#f4f8f1"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.nutritionautopilot.mobile",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.nutritionautopilot.mobile"
+    },
+    "extra": {
+      "apiBase": "http://localhost:4000"
+    }
+  }
+}
