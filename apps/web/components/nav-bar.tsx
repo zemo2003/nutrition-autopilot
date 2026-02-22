@@ -1,0 +1,104 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useEffect, useState, useCallback } from "react";
+
+function resolveApiBase() {
+  if (process.env.NEXT_PUBLIC_API_BASE) return process.env.NEXT_PUBLIC_API_BASE;
+  if (typeof window !== "undefined") {
+    return `${window.location.protocol}//${window.location.hostname}:4000`;
+  }
+  return "http://localhost:4000";
+}
+
+type HealthStatus = "connected" | "degraded" | "offline";
+
+const NAV_LINKS = [
+  { href: "/", label: "Dashboard" },
+  { href: "/upload", label: "Upload" },
+] as const;
+
+export function NavBar() {
+  const pathname = usePathname();
+  const [health, setHealth] = useState<HealthStatus>("offline");
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const res = await fetch(`${resolveApiBase()}/v1/health`, { cache: "no-store" });
+        setHealth(res.ok ? "connected" : "degraded");
+      } catch {
+        setHealth("offline");
+      }
+    };
+    check();
+    const interval = setInterval(check, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Close mobile menu on route change
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
+
+  const toggleMobile = useCallback(() => setMobileOpen((v) => !v), []);
+
+  const dotColor = health === "connected" ? "green" : health === "degraded" ? "amber" : "red";
+  const statusLabel =
+    health === "connected" ? "API Connected" : health === "degraded" ? "API Degraded" : "API Offline";
+
+  return (
+    <>
+      <nav className="topnav">
+        <div className="topnav-inner">
+          <Link href="/" className="topnav-brand">
+            <span className="topnav-brand-icon">NA</span>
+            <span>Nutrition Autopilot</span>
+          </Link>
+
+          <div className="topnav-links">
+            {NAV_LINKS.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className="topnav-link"
+                data-active={pathname === link.href ? "true" : undefined}
+              >
+                {link.label}
+              </Link>
+            ))}
+          </div>
+
+          <div className="topnav-right">
+            <div className="topnav-status">
+              <span className={`status-dot ${dotColor}`} />
+              <span className="status-text">{statusLabel}</span>
+            </div>
+            <button
+              className="mobile-menu-btn"
+              onClick={toggleMobile}
+              aria-label="Toggle menu"
+              aria-expanded={mobileOpen}
+            >
+              {mobileOpen ? "\u2715" : "\u2630"}
+            </button>
+          </div>
+        </div>
+      </nav>
+
+      <div className={`mobile-menu ${mobileOpen ? "open" : ""}`}>
+        {NAV_LINKS.map((link) => (
+          <Link
+            key={link.href}
+            href={link.href}
+            data-active={pathname === link.href ? "true" : undefined}
+          >
+            {link.label}
+          </Link>
+        ))}
+      </div>
+    </>
+  );
+}

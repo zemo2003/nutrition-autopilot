@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState, useRef, useCallback } from "react";
+
+type ResultState = "idle" | "loading" | "success" | "error";
 
 function resolveApiBase() {
   if (process.env.NEXT_PUBLIC_API_BASE) return process.env.NEXT_PUBLIC_API_BASE;
@@ -18,83 +20,108 @@ function getIsoDate(daysAgo = 0): string {
 
 export function PilotBackfillForm() {
   const [mode, setMode] = useState<"dry-run" | "commit">("commit");
-  const [weekStartDate, setWeekStartDate] = useState<string>(getIsoDate(6));
-  const [purchaseDate, setPurchaseDate] = useState<string>(getIsoDate(7));
+  const [weekStartDate, setWeekStartDate] = useState(getIsoDate(6));
+  const [purchaseDate, setPurchaseDate] = useState(getIsoDate(7));
   const [clientExternalRef, setClientExternalRef] = useState("ALEX-001");
   const [clientName, setClientName] = useState("Alex");
-  const [status, setStatus] = useState("Idle");
-  const [busy, setBusy] = useState(false);
+  const [resultState, setResultState] = useState<ResultState>("idle");
+  const [resultMessage, setResultMessage] = useState("Ready");
+  const [mealFileName, setMealFileName] = useState<string | null>(null);
+  const [lotFileName, setLotFileName] = useState<string | null>(null);
+  const mealRef = useRef<HTMLInputElement>(null);
+  const lotRef = useRef<HTMLInputElement>(null);
 
-  const hints = useMemo(
-    () => [
-      "meal_file accepts detailed meal CSV or Alex_Week_Workbook_FullDetail.xlsx (Ingredient_Log_SKU sheet).",
-      "lot_file accepts detailed lot CSV or workbook with Walmart_Receipt sheet."
-    ],
-    []
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      const mealFile = mealRef.current?.files?.[0];
+      if (!mealFile) {
+        setResultState("error");
+        setResultMessage("Meal file is required.");
+        return;
+      }
+
+      const data = new FormData();
+      data.append("mode", mode);
+      data.append("meal_file", mealFile);
+      const lotFile = lotRef.current?.files?.[0];
+      if (lotFile) data.append("lot_file", lotFile);
+      if (weekStartDate) data.append("week_start_date", weekStartDate);
+      if (purchaseDate) data.append("purchase_date", purchaseDate);
+      if (clientExternalRef) data.append("client_external_ref", clientExternalRef);
+      if (clientName) data.append("client_name", clientName);
+
+      setResultState("loading");
+      setResultMessage("Running pilot backfill...");
+
+      try {
+        const apiBase = resolveApiBase();
+        const response = await fetch(`${apiBase}/v1/pilot/backfill-week`, {
+          method: "POST",
+          body: data,
+        });
+        const json = await response.json();
+        if (!response.ok) {
+          setResultState("error");
+          setResultMessage(JSON.stringify(json, null, 2));
+          return;
+        }
+        setResultState("success");
+        setResultMessage(JSON.stringify(json, null, 2));
+      } catch (err) {
+        setResultState("error");
+        setResultMessage(err instanceof Error ? err.message : "Unknown error");
+      }
+    },
+    [mode, weekStartDate, purchaseDate, clientExternalRef, clientName]
   );
 
   return (
-    <form
-      className="card"
-      onSubmit={async (event) => {
-        event.preventDefault();
-        const form = event.currentTarget;
-        const mealFile = (form.querySelector("input[name=meal_file]") as HTMLInputElement | null)?.files?.[0];
-        const lotFile = (form.querySelector("input[name=lot_file]") as HTMLInputElement | null)?.files?.[0];
-
-        if (!mealFile) {
-          setStatus("meal_file is required.");
-          return;
-        }
-
-        const data = new FormData();
-        data.append("mode", mode);
-        data.append("meal_file", mealFile);
-        if (lotFile) data.append("lot_file", lotFile);
-        if (weekStartDate) data.append("week_start_date", weekStartDate);
-        if (purchaseDate) data.append("purchase_date", purchaseDate);
-        if (clientExternalRef) data.append("client_external_ref", clientExternalRef);
-        if (clientName) data.append("client_name", clientName);
-
-        setBusy(true);
-        setStatus("Running pilot backfill...");
-
-        try {
-          const apiBase = resolveApiBase();
-          const response = await fetch(`${apiBase}/v1/pilot/backfill-week`, {
-            method: "POST",
-            body: data
-          });
-          const json = await response.json();
-          if (!response.ok) {
-            setStatus(`Failed: ${JSON.stringify(json)}`);
-            return;
-          }
-          setStatus(`Done: ${JSON.stringify(json, null, 2)}`);
-        } catch (error) {
-          setStatus(`Failed: ${error instanceof Error ? error.message : "unknown error"}`);
-        } finally {
-          setBusy(false);
-        }
-      }}
-    >
-      <h3>Pilot Backfill (Historical Week)</h3>
-      <p>Imports last-week meals, ingests lots, auto-fills gaps, serves meals, and freezes printable labels.</p>
-      <div className="stack">
-        {hints.map((hint) => (
-          <small key={hint}>{hint}</small>
-        ))}
+    <form className="card" onSubmit={handleSubmit}>
+      <div className="card-header">
+        <div>
+          <h3>Pilot Backfill (Historical Week)</h3>
+          <p className="label-text mt-2">
+            Import meals, ingest lots, serve meals, and freeze printable labels in one step.
+          </p>
+        </div>
+        <span className="badge badge-info">Recommended</span>
       </div>
 
       <div className="grid-two">
         <label>
-          Meal File
-          <input name="meal_file" type="file" accept=".xlsx,.xls,.csv" />
+          Meal File *
+          <div className="upload-zone" style={{ padding: "var(--sp-4)" }}>
+            <div className="upload-zone-text">
+              {mealFileName ? <span className="file-selected" style={{ marginTop: 0 }}>{mealFileName}</span> : <><strong>Choose meal file</strong> or drag here</>}
+            </div>
+            <input
+              ref={mealRef}
+              name="meal_file"
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              onChange={(e) => setMealFileName(e.target.files?.[0]?.name ?? null)}
+            />
+          </div>
         </label>
         <label>
           Lot File (Optional)
-          <input name="lot_file" type="file" accept=".xlsx,.xls,.csv,.zip" />
+          <div className="upload-zone" style={{ padding: "var(--sp-4)" }}>
+            <div className="upload-zone-text">
+              {lotFileName ? <span className="file-selected" style={{ marginTop: 0 }}>{lotFileName}</span> : <><strong>Choose lot file</strong> or drag here</>}
+            </div>
+            <input
+              ref={lotRef}
+              name="lot_file"
+              type="file"
+              accept=".xlsx,.xls,.csv,.zip"
+              onChange={(e) => setLotFileName(e.target.files?.[0]?.name ?? null)}
+            />
+          </div>
         </label>
+      </div>
+
+      <div className="field-group mt-4">
         <label>
           Week Start (Mon)
           <input type="date" value={weekStartDate} onChange={(e) => setWeekStartDate(e.target.value)} />
@@ -113,17 +140,25 @@ export function PilotBackfillForm() {
         </label>
       </div>
 
-      <div className="row" style={{ marginTop: 12 }}>
+      <div className="row mt-6">
         <select value={mode} onChange={(e) => setMode(e.target.value as "dry-run" | "commit")}>
-          <option value="dry-run">dry-run</option>
-          <option value="commit">commit</option>
+          <option value="dry-run">Dry Run (preview)</option>
+          <option value="commit">Commit</option>
         </select>
-        <button type="submit" disabled={busy}>
-          {busy ? "Running..." : "Run Backfill"}
+        <button type="submit" className="btn-lg" disabled={resultState === "loading"}>
+          {resultState === "loading" ? "Running..." : "Run Backfill"}
         </button>
       </div>
 
-      <pre>{status}</pre>
+      <div className={`result-box mt-4 result-${resultState}`}>
+        {resultState === "loading" && <strong>Processing backfill...</strong>}
+        {resultState === "success" && <strong>Backfill Complete</strong>}
+        {resultState === "error" && <strong>Backfill Failed</strong>}
+        {resultState === "idle" && <span>Ready to run</span>}
+        {resultMessage && resultState !== "idle" && (
+          <pre>{resultMessage}</pre>
+        )}
+      </div>
     </form>
   );
 }

@@ -23,35 +23,114 @@ async function getClients() {
   }
 }
 
+type Client = {
+  id: string;
+  name: string;
+  externalRef?: string;
+};
+
 export default async function HomePage() {
   const [state, clients] = await Promise.all([getState(), getClients()]);
   const isEmpty = !state || !state.hasCommittedSot;
-  const primaryClientId = clients[0]?.id ?? "no-client";
 
   return (
-    <main>
-      <h1>Nutrition Autopilot</h1>
-      <p>Blank-slate operations console with immutable nutrition label lineage.</p>
-
-      <div className="row">
-        <Link href="/upload">Upload + Pilot Backfill</Link>
-        <Link href={`/clients/${primaryClientId}/calendar`}>Calendar Drill-down</Link>
+    <div className="page-shell">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Dashboard</h1>
+          <p className="page-subtitle">
+            Nutrition operations overview with immutable label traceability.
+          </p>
+        </div>
+        <div className="page-header-actions">
+          <Link href="/upload" className="btn btn-primary btn-lg">
+            Upload + Backfill
+          </Link>
+        </div>
       </div>
 
       {isEmpty ? (
-        <section className="card" style={{ marginTop: 16 }}>
-          <h2>Empty State</h2>
-          <p>No active SKUs or labels are visible until a valid SOT import is committed.</p>
-          <p>
-            Generate template: <code>/Users/daniel/Desktop/Nutrition_Autopilot_SOT.xlsx</code>
-          </p>
+        <section className="card">
+          <div className="state-box">
+            <div className="state-icon">&#x1f4e6;</div>
+            <div className="state-title">No Data Yet</div>
+            <div className="state-desc">
+              Import a Source of Truth workbook or run a Pilot Backfill to populate
+              SKUs, recipes, and nutrition labels.
+            </div>
+            <Link href="/upload" className="btn btn-primary mt-4">
+              Go to Upload Center
+            </Link>
+          </div>
         </section>
       ) : (
-        <section className="card" style={{ marginTop: 16 }}>
-          <h2>System Summary</h2>
-          <pre>{JSON.stringify(state, null, 2)}</pre>
-        </section>
+        <>
+          <section className="section">
+            <h2 className="section-title">System Overview</h2>
+            <div className="kpi-grid">
+              <div className="kpi">
+                <div className="kpi-value">{state.skuCount ?? 0}</div>
+                <div className="kpi-label">Active SKUs</div>
+              </div>
+              <div className="kpi">
+                <div className="kpi-value">{state.ingredientCount ?? 0}</div>
+                <div className="kpi-label">Ingredients</div>
+              </div>
+              <div className="kpi">
+                <div className="kpi-value">{state.lotCount ?? 0}</div>
+                <div className="kpi-label">Inventory Lots</div>
+              </div>
+              <div className="kpi">
+                <div className="kpi-value">{state.scheduleCount ?? 0}</div>
+                <div className="kpi-label">Schedules</div>
+              </div>
+              <div className="kpi">
+                <div className="kpi-value">{state.servedMealCount ?? 0}</div>
+                <div className="kpi-label">Served Meals</div>
+              </div>
+              <div className="kpi">
+                <div className="kpi-value">{state.labelCount ?? 0}</div>
+                <div className="kpi-label">Frozen Labels</div>
+              </div>
+              <div className="kpi">
+                <div className="kpi-value">{state.openVerificationCount ?? 0}</div>
+                <div className="kpi-label">Open Verifications</div>
+                {(state.openVerificationCount ?? 0) > 0 && (
+                  <div className="kpi-note">
+                    <span className="badge badge-warn">Needs Attention</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+
+          {clients.length > 0 && (
+            <section className="section">
+              <h2 className="section-title">Clients</h2>
+              <div className="client-grid">
+                {clients.map((client: Client) => (
+                  <Link
+                    key={client.id}
+                    href={`/clients/${client.id}/calendar`}
+                    className="client-card"
+                  >
+                    <div className="client-avatar">
+                      {client.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="client-card-info">
+                      <div className="client-card-name">{client.name}</div>
+                      {client.externalRef && (
+                        <div className="client-card-meta">{client.externalRef}</div>
+                      )}
+                    </div>
+                    <span className="client-card-arrow">&rarr;</span>
+                  </Link>
+                ))}
+              </div>
+            </section>
+          )}
+        </>
       )}
-    </main>
+    </div>
   );
 }

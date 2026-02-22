@@ -40,90 +40,116 @@ export default async function PrintLabelPage({ params }: { params: Promise<{ lab
 
   if (!label) {
     return (
-      <main>
-        <h1>Label Not Found</h1>
-        <Link href="/">Back</Link>
-      </main>
+      <div className="page-shell">
+        <div className="card">
+          <div className="state-box">
+            <div className="state-icon">!</div>
+            <div className="state-title">Label Not Found</div>
+            <Link href="/" className="btn btn-primary mt-4">Back to Dashboard</Link>
+          </div>
+        </div>
+      </div>
     );
   }
 
   const payload = (label.renderPayload ?? {}) as LabelPayload;
-  const rounded = payload.roundedFda ?? {};
+  const r = payload.roundedFda ?? {};
 
   return (
-    <main>
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <h1 style={{ margin: 0 }}>Printable Label</h1>
-        <div className="row">
+    <div className="page-shell">
+      <div className="page-header no-print">
+        <div>
+          <div className="breadcrumbs" style={{ marginBottom: 8 }}>
+            <Link href="/">Dashboard</Link>
+            <span className="sep">/</span>
+            <Link href={`/labels/${labelId}`}>Label</Link>
+            <span className="sep">/</span>
+            <span className="current">Print</span>
+          </div>
+          <h1 className="page-title">Print Label</h1>
+          <p className="page-subtitle">{label.title}</p>
+        </div>
+        <div className="page-header-actions">
           <PrintButton />
-          <Link href={`/labels/${labelId}`}>Back to Label</Link>
+          <Link href={`/labels/${labelId}`} className="btn btn-outline">
+            Back to Label
+          </Link>
         </div>
       </div>
 
       <section className="print-label">
-        <h2 style={{ margin: 0 }}>Nutrition Facts</h2>
-        <p style={{ marginTop: 4 }}>
-          <strong>{label.title}</strong>
-        </p>
-        <div className="print-divider" />
+        <div className="print-label-inner">
+          <div className="print-nf-title">Nutrition Facts</div>
+          <div className="print-serving">
+            Serving size {payload.servingWeightG ? `${payload.servingWeightG.toFixed(0)}g` : "n/a"}
+          </div>
+          <div className="print-amount-line">Amount per serving</div>
 
-        <div className="print-row print-calories">
-          <span>Calories</span>
-          <span>{rounded.calories ?? 0}</span>
-        </div>
-        <div className="print-divider thick" />
+          <div className="print-calories-row">
+            <span className="print-calories-label">Calories</span>
+            <span className="print-calories-value">{r.calories ?? 0}</span>
+          </div>
 
-        <div className="print-row">
-          <span>Total Fat</span>
-          <span>{rounded.fatG ?? 0}g</span>
+          <div className="print-dv-header">% Daily Value*</div>
+
+          <div className="print-row major">
+            <span><strong>Total Fat</strong> {r.fatG ?? 0}g</span>
+          </div>
+          <div className="print-row sub">
+            <span>Saturated Fat {r.satFatG ?? 0}g</span>
+          </div>
+          <div className="print-row sub">
+            <span><em>Trans</em> Fat {r.transFatG ?? 0}g</span>
+          </div>
+          <div className="print-row major">
+            <span><strong>Cholesterol</strong> {r.cholesterolMg ?? 0}mg</span>
+          </div>
+          <div className="print-row major">
+            <span><strong>Sodium</strong> {r.sodiumMg ?? 0}mg</span>
+          </div>
+          <div className="print-row major">
+            <span><strong>Total Carbohydrate</strong> {r.carbG ?? 0}g</span>
+          </div>
+          <div className="print-row sub">
+            <span>Dietary Fiber {r.fiberG ?? 0}g</span>
+          </div>
+          <div className="print-row sub">
+            <span>Total Sugars {r.sugarsG ?? 0}g</span>
+          </div>
+          <div className="print-row sub">
+            <span>Includes {r.addedSugarsG ?? 0}g Added Sugars</span>
+          </div>
+          <div className="print-row major thick-top">
+            <span><strong>Protein</strong> {r.proteinG ?? 0}g</span>
+          </div>
+
+          <div className="print-footer">
+            * The % Daily Value tells you how much a nutrient in a serving
+            of food contributes to a daily diet. 2,000 calories a day is
+            used for general nutrition advice.
+          </div>
+
+          <div className="print-ingredients">
+            <strong>INGREDIENTS:</strong>{" "}
+            {payload.ingredientDeclaration ?? "n/a"}
+          </div>
+
+          {payload.allergenStatement && (
+            <div className="print-allergens">
+              <strong>CONTAINS:</strong> {payload.allergenStatement}
+            </div>
+          )}
+
+          <div className="print-qa">
+            QA: {payload.qa?.pass ? "PASS" : "CHECK"} (delta{" "}
+            {payload.qa?.delta?.toFixed(1) ?? "n/a"} kcal)
+          </div>
+
+          <div className="print-label-id">
+            {label.title} | ID: {label.id} | v{label.version}
+          </div>
         </div>
-        <div className="print-row">
-          <span>Saturated Fat</span>
-          <span>{rounded.satFatG ?? 0}g</span>
-        </div>
-        <div className="print-row">
-          <span>Trans Fat</span>
-          <span>{rounded.transFatG ?? 0}g</span>
-        </div>
-        <div className="print-row">
-          <span>Cholesterol</span>
-          <span>{rounded.cholesterolMg ?? 0}mg</span>
-        </div>
-        <div className="print-row">
-          <span>Sodium</span>
-          <span>{rounded.sodiumMg ?? 0}mg</span>
-        </div>
-        <div className="print-row">
-          <span>Total Carbohydrate</span>
-          <span>{rounded.carbG ?? 0}g</span>
-        </div>
-        <div className="print-row">
-          <span>Dietary Fiber</span>
-          <span>{rounded.fiberG ?? 0}g</span>
-        </div>
-        <div className="print-row">
-          <span>Total Sugars</span>
-          <span>{rounded.sugarsG ?? 0}g</span>
-        </div>
-        <div className="print-row">
-          <span>Added Sugars</span>
-          <span>{rounded.addedSugarsG ?? 0}g</span>
-        </div>
-        <div className="print-row">
-          <span>Protein</span>
-          <span>{rounded.proteinG ?? 0}g</span>
-        </div>
-        <div className="print-divider thick" />
-        <p>Serving size: {payload.servingWeightG ? payload.servingWeightG.toFixed(1) : "n/a"} g</p>
-        <p>{payload.ingredientDeclaration ?? "Ingredients: n/a"}</p>
-        <p>{payload.allergenStatement ?? "Contains: n/a"}</p>
-        <p>
-          QA: {payload.qa?.pass ? "PASS" : "CHECK"} (delta {payload.qa?.delta?.toFixed(1) ?? "n/a"} kcal)
-        </p>
-        <p>
-          Label ID: <code>{label.id}</code> | Version: <code>{label.version}</code>
-        </p>
       </section>
-    </main>
+    </div>
   );
 }
