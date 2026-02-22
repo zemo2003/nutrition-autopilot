@@ -16,6 +16,7 @@ type HealthStatus = "connected" | "degraded" | "offline";
 
 const NAV_LINKS = [
   { href: "/", label: "Dashboard" },
+  { href: "/calendar", label: "Calendar" },
   { href: "/upload", label: "Upload" },
 ] as const;
 
