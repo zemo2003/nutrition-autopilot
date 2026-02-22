@@ -92,6 +92,34 @@ npm run dev:web
 - label detail: `/labels/<labelId>`
 - print view: `/labels/<labelId>/print`
 
+## Get It Online (Browser Access Anywhere)
+
+This repo now includes `/Users/daniel/Documents/GitHub/nutrition-autopilot/render.yaml` for Render Blueprint deploy.
+
+### Render Deploy Steps
+
+1. In Render, click **New +** -> **Blueprint**.
+2. Connect GitHub repo: `zemo2003/nutrition-autopilot`.
+3. Render will detect 2 web services from `render.yaml`:
+   - `nutrition-autopilot-api`
+   - `nutrition-autopilot-web`
+4. Set required env vars before first deploy:
+   - On `nutrition-autopilot-api`: `DATABASE_URL` = your Neon Postgres URL.
+   - On `nutrition-autopilot-web`: `NEXT_PUBLIC_API_BASE` = the public URL of `nutrition-autopilot-api` (for example `https://nutrition-autopilot-api.onrender.com`).
+5. Deploy both services.
+
+After deploy:
+- Web app URL: `https://<your-web-service>.onrender.com`
+- Upload/backfill page: `https://<your-web-service>.onrender.com/upload`
+
+### Optional: Re-Backfill Pilot Week In Hosted Env
+
+From hosted web upload page, run **Pilot Backfill (Historical Week)** again, or use:
+
+```bash
+API_BASE="https://<your-api-service>.onrender.com" npm run pilot:backfill
+```
+
 ## GitHub + DB + TestFlight
 
 See `/Users/daniel/Desktop/nutrition-autopilot/docs/LAUNCH_SETUP.md`.
