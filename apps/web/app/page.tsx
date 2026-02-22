@@ -21,6 +21,24 @@ type Client = {
   externalRef?: string;
 };
 
+type QualitySummary = {
+  month: string;
+  coverage: {
+    productFull40CoverageRatio: number;
+    finalLabelFull40CoverageRatio: number;
+  };
+  evidence: {
+    inferredRows: number;
+    exceptionRows: number;
+    floorRows: number;
+    provisionalLabels: number;
+  };
+  totals: {
+    openVerificationTasks: number;
+    criticalOrHighVerificationTasks: number;
+  };
+};
+
 async function getState() {
   try {
     const response = await fetch(`${API_BASE}/v1/system/state`, { cache: "no-store" });
@@ -63,8 +81,19 @@ async function getClients() {
   }
 }
 
+async function getQualitySummary() {
+  try {
+    const month = new Date().toISOString().slice(0, 7);
+    const response = await fetch(`${API_BASE}/v1/quality/summary?month=${month}`, { cache: "no-store" });
+    if (!response.ok) return null;
+    return (await response.json()) as QualitySummary;
+  } catch {
+    return null;
+  }
+}
+
 export default async function HomePage() {
-  const [state, clients] = await Promise.all([getState(), getClients()]);
+  const [state, clients, quality] = await Promise.all([getState(), getClients(), getQualitySummary()]);
   const isEmpty = !state || !state.hasCommittedSot;
 
   return (
@@ -137,6 +166,45 @@ export default async function HomePage() {
               </div>
             </div>
           </section>
+
+          {quality && (
+            <section className="section">
+              <h2 className="section-title">Quality Summary ({quality.month})</h2>
+              <div className="kpi-grid">
+                <div className="kpi">
+                  <div className="kpi-value">{(quality.coverage.productFull40CoverageRatio * 100).toFixed(0)}%</div>
+                  <div className="kpi-label">Product 40-Key Coverage</div>
+                </div>
+                <div className="kpi">
+                  <div className="kpi-value">{(quality.coverage.finalLabelFull40CoverageRatio * 100).toFixed(0)}%</div>
+                  <div className="kpi-label">Final Label 40-Key Coverage</div>
+                </div>
+                <div className="kpi">
+                  <div className="kpi-value">{quality.evidence.provisionalLabels}</div>
+                  <div className="kpi-label">Provisional Labels</div>
+                </div>
+                <div className="kpi">
+                  <div className="kpi-value">{quality.evidence.inferredRows}</div>
+                  <div className="kpi-label">Inferred Nutrient Rows</div>
+                </div>
+                <div className="kpi">
+                  <div className="kpi-value">{quality.evidence.exceptionRows}</div>
+                  <div className="kpi-label">Historical Exceptions</div>
+                </div>
+                <div className="kpi">
+                  <div className="kpi-value">{quality.evidence.floorRows}</div>
+                  <div className="kpi-label">Legacy Floor Rows</div>
+                </div>
+                <div className="kpi">
+                  <div className="kpi-value">{quality.totals.criticalOrHighVerificationTasks}</div>
+                  <div className="kpi-label">High/Critical Verifications</div>
+                  <div className="kpi-note">
+                    <Link href={"/verification" as any} className="btn btn-outline btn-sm">Open Queue</Link>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
 
           {clients.length > 0 && (
             <section className="section">

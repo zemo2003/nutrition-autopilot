@@ -3,6 +3,16 @@ import Link from "next/link";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:4000";
 
 type LabelPayload = {
+  provisional?: boolean;
+  reasonCodes?: string[];
+  evidenceSummary?: {
+    verifiedCount?: number;
+    inferredCount?: number;
+    exceptionCount?: number;
+    unverifiedCount?: number;
+    totalNutrientRows?: number;
+    provisional?: boolean;
+  };
   servingWeightG?: number;
   roundedFda?: {
     calories?: number;
@@ -86,6 +96,9 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
   }
 
   const payload = (label.renderPayload ?? {}) as LabelPayload;
+  const evidence = payload.evidenceSummary ?? (label.evidenceSummary as LabelPayload["evidenceSummary"]);
+  const provisional = Boolean(label.provisional ?? payload.provisional ?? evidence?.provisional);
+  const reasonCodes = payload.reasonCodes ?? [];
   const r = payload.roundedFda ?? {};
 
   return (
@@ -102,6 +115,7 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
           <div className="row mt-2">
             <span className="tag">{label.labelType}</span>
             <span className="tag">v{label.version}</span>
+            {provisional ? <span className="badge badge-warn">Provisional Historical Label</span> : null}
             {label.frozenAt && (
               <span className="tag">
                 Frozen {new Date(label.frozenAt).toLocaleDateString()}
@@ -116,6 +130,26 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
           <Link href="/" className="btn btn-outline">Dashboard</Link>
         </div>
       </div>
+
+      {provisional ? (
+        <section className="card section">
+          <div className="card-header">
+            <h3>Evidence Warnings</h3>
+            <span className="badge badge-warn">Provisional</span>
+          </div>
+          <div className="row">
+            {reasonCodes.length ? (
+              reasonCodes.map((code) => (
+                <span key={code} className="tag">
+                  {code}
+                </span>
+              ))
+            ) : (
+              <span className="label-text">No reason codes provided.</span>
+            )}
+          </div>
+        </section>
+      ) : null}
 
       <div className="grid-two">
         <section>
@@ -233,6 +267,35 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
               </div>
             ) : (
               <p className="label-text">No QA data available.</p>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="card-header">
+              <h3>Evidence Summary</h3>
+              {evidence?.provisional ? <span className="badge badge-warn">Needs Review</span> : <span className="badge badge-success">Stable</span>}
+            </div>
+            {evidence ? (
+              <div className="qa-block">
+                <div className="qa-metric">
+                  <div className="qa-metric-value">{evidence.verifiedCount ?? 0}</div>
+                  <div className="qa-metric-label">Verified</div>
+                </div>
+                <div className="qa-metric">
+                  <div className="qa-metric-value">{evidence.inferredCount ?? 0}</div>
+                  <div className="qa-metric-label">Inferred</div>
+                </div>
+                <div className="qa-metric">
+                  <div className="qa-metric-value">{evidence.exceptionCount ?? 0}</div>
+                  <div className="qa-metric-label">Exceptions</div>
+                </div>
+                <div className="qa-metric">
+                  <div className="qa-metric-value">{evidence.unverifiedCount ?? 0}</div>
+                  <div className="qa-metric-label">Unverified</div>
+                </div>
+              </div>
+            ) : (
+              <p className="label-text">No evidence summary available.</p>
             )}
           </div>
         </section>

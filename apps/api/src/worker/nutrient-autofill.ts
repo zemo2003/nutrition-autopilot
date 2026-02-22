@@ -1,4 +1,10 @@
-import { NutrientSourceType, Prisma, VerificationStatus, prisma } from "@nutrition/db";
+import {
+  NutrientEvidenceGrade,
+  NutrientSourceType,
+  Prisma,
+  VerificationStatus,
+  prisma
+} from "@nutrition/db";
 
 const coreKeys = ["kcal", "protein_g", "carb_g", "fat_g", "sodium_mg"] as const;
 
@@ -10,6 +16,8 @@ type AutofillResult = {
   sourceType: NutrientSourceType;
   sourceRef: string;
   confidence: number;
+  evidenceGrade: NutrientEvidenceGrade;
+  historicalException: boolean;
   method: "openfoodfacts_upc" | "ingredient_fallback";
 };
 
@@ -101,6 +109,8 @@ async function fetchOpenFoodFactsByUpc(upc: string): Promise<AutofillResult | nu
       sourceType: NutrientSourceType.MANUFACTURER,
       sourceRef: `https://world.openfoodfacts.org/product/${upc}`,
       confidence: populatedCore >= 4 ? 0.92 : 0.72,
+      evidenceGrade: NutrientEvidenceGrade.OPENFOODFACTS,
+      historicalException: false,
       method: "openfoodfacts_upc"
     };
   } catch {
@@ -146,6 +156,8 @@ async function resolveNutrients(product: { upc: string | null; name: string; ing
     sourceType: NutrientSourceType.DERIVED,
     sourceRef: `ingredient-fallback:${product.ingredient.canonicalKey}`,
     confidence: 0.55,
+    evidenceGrade: NutrientEvidenceGrade.INFERRED_FROM_INGREDIENT,
+    historicalException: false,
     method: "ingredient_fallback"
   };
 }
@@ -155,6 +167,10 @@ async function upsertNutrientsForProduct(input: {
   values: CoreNutrients;
   sourceType: NutrientSourceType;
   sourceRef: string;
+  confidence: number;
+  evidenceGrade: NutrientEvidenceGrade;
+  historicalException: boolean;
+  retrievalRunId: string;
 }) {
   const defs = await prisma.nutrientDefinition.findMany({
     where: { key: { in: coreKeys as unknown as string[] } }
@@ -178,6 +194,11 @@ async function upsertNutrientsForProduct(input: {
         valuePer100g: value,
         sourceType: input.sourceType,
         sourceRef: input.sourceRef,
+        confidenceScore: input.confidence,
+        evidenceGrade: input.evidenceGrade,
+        historicalException: input.historicalException,
+        retrievedAt: new Date(),
+        retrievalRunId: input.retrievalRunId,
         verificationStatus: VerificationStatus.NEEDS_REVIEW,
         version: { increment: 1 }
       },
@@ -187,6 +208,11 @@ async function upsertNutrientsForProduct(input: {
         valuePer100g: value,
         sourceType: input.sourceType,
         sourceRef: input.sourceRef,
+        confidenceScore: input.confidence,
+        evidenceGrade: input.evidenceGrade,
+        historicalException: input.historicalException,
+        retrievedAt: new Date(),
+        retrievalRunId: input.retrievalRunId,
         verificationStatus: VerificationStatus.NEEDS_REVIEW,
         createdBy: "agent"
       }
@@ -231,6 +257,7 @@ async function ensureVerificationTask(input: {
 }
 
 export async function runNutrientAutofillSweep() {
+  const retrievalRunId = `worker-${new Date().toISOString()}`;
   const products = await prisma.productCatalog.findMany({
     include: {
       ingredient: true,
@@ -270,7 +297,11 @@ export async function runNutrientAutofillSweep() {
       productId: product.id,
       values: resolved.values,
       sourceType: resolved.sourceType,
-      sourceRef: resolved.sourceRef
+      sourceRef: resolved.sourceRef,
+      confidence: resolved.confidence,
+      evidenceGrade: resolved.evidenceGrade,
+      historicalException: resolved.historicalException,
+      retrievalRunId
     });
 
     await ensureVerificationTask({

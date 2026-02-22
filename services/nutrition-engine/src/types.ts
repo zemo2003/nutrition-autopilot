@@ -24,6 +24,15 @@ export type LabelComputationInput = {
   servings: number;
   lines: RecipeLineInput[];
   consumedLots: ConsumedLotInput[];
+  provisional?: boolean;
+  evidenceSummary?: {
+    verifiedCount: number;
+    inferredCount: number;
+    exceptionCount: number;
+    unverifiedCount?: number;
+    totalNutrientRows?: number;
+    provisional: boolean;
+  };
 };
 
 export type LabelComputationResult = {
@@ -49,5 +58,14 @@ export type LabelComputationResult = {
     labeledCalories: number;
     delta: number;
     pass: boolean;
+  };
+  provisional: boolean;
+  evidenceSummary: {
+    verifiedCount: number;
+    inferredCount: number;
+    exceptionCount: number;
+    unverifiedCount: number;
+    totalNutrientRows: number;
+    provisional: boolean;
   };
 };

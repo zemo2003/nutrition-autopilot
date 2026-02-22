@@ -20,6 +20,7 @@ function getIsoDate(daysAgo = 0): string {
 
 export function PilotBackfillForm() {
   const [mode, setMode] = useState<"dry-run" | "commit">("commit");
+  const [historicalMode, setHistoricalMode] = useState(true);
   const [weekStartDate, setWeekStartDate] = useState(getIsoDate(6));
   const [purchaseDate, setPurchaseDate] = useState(getIsoDate(7));
   const [clientExternalRef, setClientExternalRef] = useState("ALEX-001");
@@ -50,6 +51,7 @@ export function PilotBackfillForm() {
       if (purchaseDate) data.append("purchase_date", purchaseDate);
       if (clientExternalRef) data.append("client_external_ref", clientExternalRef);
       if (clientName) data.append("client_name", clientName);
+      data.append("historicalMode", historicalMode ? "true" : "false");
 
       setResultState("loading");
       setResultMessage("Running pilot backfill...");
@@ -73,7 +75,7 @@ export function PilotBackfillForm() {
         setResultMessage(err instanceof Error ? err.message : "Unknown error");
       }
     },
-    [mode, weekStartDate, purchaseDate, clientExternalRef, clientName]
+    [mode, historicalMode, weekStartDate, purchaseDate, clientExternalRef, clientName]
   );
 
   return (
@@ -145,6 +147,15 @@ export function PilotBackfillForm() {
           <option value="dry-run">Dry Run (preview)</option>
           <option value="commit">Commit</option>
         </select>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: "var(--sp-2)" }}>
+          <input
+            type="checkbox"
+            checked={historicalMode}
+            onChange={(e) => setHistoricalMode(e.target.checked)}
+            style={{ width: 16, height: 16 }}
+          />
+          Historical Mode (allow synthetic lots)
+        </label>
         <button type="submit" className="btn-lg" disabled={resultState === "loading"}>
           {resultState === "loading" ? "Running..." : "Run Backfill"}
         </button>

@@ -4,6 +4,16 @@ import { PrintButton } from "../../../../components/print-button";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:4000";
 
 type LabelPayload = {
+  provisional?: boolean;
+  reasonCodes?: string[];
+  evidenceSummary?: {
+    verifiedCount?: number;
+    inferredCount?: number;
+    exceptionCount?: number;
+    unverifiedCount?: number;
+    totalNutrientRows?: number;
+    provisional?: boolean;
+  };
   servingWeightG?: number;
   roundedFda?: {
     calories?: number;
@@ -53,6 +63,9 @@ export default async function PrintLabelPage({ params }: { params: Promise<{ lab
   }
 
   const payload = (label.renderPayload ?? {}) as LabelPayload;
+  const evidence = payload.evidenceSummary ?? (label.evidenceSummary as LabelPayload["evidenceSummary"]);
+  const provisional = Boolean(label.provisional ?? payload.provisional ?? evidence?.provisional);
+  const reasonCodes = payload.reasonCodes ?? [];
   const r = payload.roundedFda ?? {};
 
   return (
@@ -79,6 +92,11 @@ export default async function PrintLabelPage({ params }: { params: Promise<{ lab
 
       <section className="print-label">
         <div className="print-label-inner">
+          {provisional ? (
+            <div className="print-provisional-ribbon">
+              Provisional Historical Label
+            </div>
+          ) : null}
           <div className="print-nf-title">Nutrition Facts</div>
           <div className="print-serving">
             Serving size {payload.servingWeightG ? `${payload.servingWeightG.toFixed(0)}g` : "n/a"}
@@ -144,6 +162,18 @@ export default async function PrintLabelPage({ params }: { params: Promise<{ lab
             QA: {payload.qa?.pass ? "PASS" : "CHECK"} (delta{" "}
             {payload.qa?.delta?.toFixed(1) ?? "n/a"} kcal)
           </div>
+
+          {evidence ? (
+            <div className="print-evidence">
+              Evidence: verified {evidence.verifiedCount ?? 0} | inferred {evidence.inferredCount ?? 0} | exceptions {evidence.exceptionCount ?? 0} | unverified {evidence.unverifiedCount ?? 0}
+            </div>
+          ) : null}
+
+          {reasonCodes.length ? (
+            <div className="print-reason-codes">
+              {reasonCodes.join(" | ")}
+            </div>
+          ) : null}
 
           <div className="print-label-id">
             {label.title} | ID: {label.id} | v{label.version}

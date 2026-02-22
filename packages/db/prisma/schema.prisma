@@ -27,6 +27,16 @@ enum NutrientSourceType {
   DERIVED
 }
 
+enum NutrientEvidenceGrade {
+  MANUFACTURER_LABEL
+  USDA_BRANDED
+  USDA_GENERIC
+  OPENFOODFACTS
+  INFERRED_FROM_INGREDIENT
+  INFERRED_FROM_SIMILAR_PRODUCT
+  HISTORICAL_EXCEPTION
+}
+
 enum VerificationStatus {
   VERIFIED
   NEEDS_REVIEW
@@ -306,6 +316,11 @@ model ProductNutrientValue {
   valuePer100g    Float?
   sourceType      NutrientSourceType
   sourceRef       String
+  confidenceScore Float @default(0)
+  evidenceGrade   NutrientEvidenceGrade @default(HISTORICAL_EXCEPTION)
+  historicalException Boolean @default(false)
+  retrievedAt     DateTime?
+  retrievalRunId  String?
   verificationStatus VerificationStatus @default(NEEDS_REVIEW)
   createdAt       DateTime @default(now())
   createdBy       String   @default("system")

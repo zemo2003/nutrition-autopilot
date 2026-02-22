@@ -1,5 +1,5 @@
 import { addHours } from "date-fns";
-import { NutrientSourceType, Prisma, VerificationStatus, prisma } from "@nutrition/db";
+import { NutrientEvidenceGrade, NutrientSourceType, Prisma, VerificationStatus, prisma } from "@nutrition/db";
 import { mapOrderLineToIngredient } from "@nutrition/importers";
 import type { InstacartOrderRow, PilotMealRow } from "@nutrition/importers";
 import { freezeLabelFromScheduleDone } from "./label-freeze.js";
@@ -38,6 +38,7 @@ type RunPilotBackfillInput = {
   mealRows: PilotMealRow[];
   lotRows: InstacartOrderRow[];
   sourceOrderRef?: string;
+  historicalMode?: boolean;
 };
 
 export type RunPilotBackfillResult = {
@@ -58,6 +59,7 @@ export type RunPilotBackfillResult = {
 
 export async function runPilotBackfill(input: RunPilotBackfillInput): Promise<RunPilotBackfillResult> {
   const queue: ScheduleQueueItem[] = [];
+  const historicalMode = input.historicalMode ?? false;
   const created = {
     clients: 0,
     ingredients: 0,
@@ -527,12 +529,18 @@ export async function runPilotBackfill(input: RunPilotBackfillInput): Promise<Ru
       };
 
       if (hasCoreHints(hintedValues)) {
+        const sourceType = lotRow.nutrientSourceTypeHint ?? NutrientSourceType.MANUFACTURER;
         await upsertCoreNutrients(tx, {
           productId: product.id,
           nutrientDefinitionByKey,
           values: hintedValues,
-          sourceType: lotRow.nutrientSourceTypeHint ?? NutrientSourceType.MANUFACTURER,
-          sourceRef: lotRow.nutrientSourceRefHint ?? `${sourceOrderRef}:row:${idx + 2}`
+          sourceType,
+          sourceRef: lotRow.nutrientSourceRefHint ?? `${sourceOrderRef}:row:${idx + 2}`,
+          evidenceGrade:
+            sourceType === NutrientSourceType.USDA
+              ? NutrientEvidenceGrade.USDA_BRANDED
+              : NutrientEvidenceGrade.MANUFACTURER_LABEL,
+          confidenceScore: sourceType === NutrientSourceType.USDA ? 0.88 : 0.92
         });
       } else {
         const fallback = resolveFallbackNutrientsForIngredientKey(ingredient.canonicalKey);
@@ -542,7 +550,10 @@ export async function runPilotBackfill(input: RunPilotBackfillInput): Promise<Ru
             nutrientDefinitionByKey,
             values: fallback,
             sourceType: NutrientSourceType.DERIVED,
-            sourceRef: `fallback:${ingredient.canonicalKey}`
+            sourceRef: `fallback:${ingredient.canonicalKey}`,
+            evidenceGrade: NutrientEvidenceGrade.INFERRED_FROM_INGREDIENT,
+            confidenceScore: 0.55,
+            historicalException: historicalMode
           });
           await ensureOpenTask(tx, {
             organizationId: input.organizationId,
@@ -555,7 +566,11 @@ export async function runPilotBackfill(input: RunPilotBackfillInput): Promise<Ru
               productId: product.id,
               productName: product.name,
               sourceRef: `fallback:${ingredient.canonicalKey}`,
-              ingredientKey: ingredient.canonicalKey
+              ingredientKey: ingredient.canonicalKey,
+              nutrientKeys: [...coreNutrientKeys],
+              confidence: 0.55,
+              sourceType: "DERIVED",
+              historicalException: historicalMode
             }
           });
         } else {
@@ -602,6 +617,26 @@ export async function runPilotBackfill(input: RunPilotBackfillInput): Promise<Ru
       const availableG = availableByIngredient.get(ingredientKey) ?? 0;
       if (availableG + 0.01 >= requiredG) continue;
       const shortageG = Math.max(1, Math.ceil((requiredG - availableG) * 1.05));
+
+      if (!historicalMode) {
+        await ensureOpenTask(tx, {
+          organizationId: input.organizationId,
+          taskType: "SOURCE_RETRIEVAL",
+          severity: "CRITICAL",
+          title: `Inventory shortage blocks freeze: ${ingredientKey}`,
+          description:
+            "Missing inventory detected. Synthetic lots are disabled unless historicalMode=true. Freeze remains blocked.",
+          dedupeKey: `inventory-shortage:${ingredientKey}`,
+          payload: {
+            ingredientKey,
+            shortageG,
+            requiredG,
+            availableG,
+            historicalException: false
+          }
+        });
+        continue;
+      }
 
       let ingredient = ingredientByKey.get(ingredientKey);
       if (!ingredient) {
@@ -661,7 +696,10 @@ export async function runPilotBackfill(input: RunPilotBackfillInput): Promise<Ru
           sodium_mg: fallback.sodium_mg ?? 0
         },
         sourceType: NutrientSourceType.DERIVED,
-        sourceRef: `synthetic:${ingredient.canonicalKey}`
+        sourceRef: `historical-exception:synthetic:${ingredient.canonicalKey}`,
+        evidenceGrade: NutrientEvidenceGrade.HISTORICAL_EXCEPTION,
+        confidenceScore: 0.2,
+        historicalException: true
       });
 
       const lot = await tx.inventoryLot.create({
@@ -700,7 +738,11 @@ export async function runPilotBackfill(input: RunPilotBackfillInput): Promise<Ru
         payload: {
           ingredientKey: ingredient.canonicalKey,
           shortageG,
-          syntheticProductId: syntheticProduct.id
+          syntheticProductId: syntheticProduct.id,
+          historicalException: true,
+          nutrientKeys: [...coreNutrientKeys],
+          confidence: 0.2,
+          sourceType: "DERIVED"
         }
       });
     }
@@ -845,6 +887,11 @@ async function upsertCoreNutrients(
     values: CoreNutrientValues;
     sourceType: NutrientSourceType;
     sourceRef: string;
+    evidenceGrade?: NutrientEvidenceGrade;
+    confidenceScore?: number;
+    historicalException?: boolean;
+    retrievedAt?: Date | null;
+    retrievalRunId?: string | null;
   }
 ) {
   for (const key of coreNutrientKeys) {
@@ -864,6 +911,11 @@ async function upsertCoreNutrients(
         valuePer100g: value,
         sourceType: input.sourceType,
         sourceRef: input.sourceRef,
+        confidenceScore: input.confidenceScore ?? 0,
+        evidenceGrade: input.evidenceGrade ?? NutrientEvidenceGrade.HISTORICAL_EXCEPTION,
+        historicalException: input.historicalException ?? false,
+        retrievedAt: input.retrievedAt ?? null,
+        retrievalRunId: input.retrievalRunId ?? null,
         verificationStatus: VerificationStatus.NEEDS_REVIEW,
         version: { increment: 1 }
       },
@@ -873,6 +925,11 @@ async function upsertCoreNutrients(
         valuePer100g: value,
         sourceType: input.sourceType,
         sourceRef: input.sourceRef,
+        confidenceScore: input.confidenceScore ?? 0,
+        evidenceGrade: input.evidenceGrade ?? NutrientEvidenceGrade.HISTORICAL_EXCEPTION,
+        historicalException: input.historicalException ?? false,
+        retrievedAt: input.retrievedAt ?? null,
+        retrievalRunId: input.retrievalRunId ?? null,
         verificationStatus: VerificationStatus.NEEDS_REVIEW,
         createdBy: "agent"
       }

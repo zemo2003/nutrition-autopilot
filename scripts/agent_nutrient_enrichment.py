@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Agent sweep: enrich product nutrient values from public sources (USDA + OpenFoodFacts).
+Historical nutrient recovery agent (40-key coverage with provenance).
 
-This script is built for rapid pilot cleanup while preserving traceability:
-- pulls nutrients per 100g from source APIs
-- maps source nutrients to the platform's canonical 40-key dictionary
-- upserts ProductNutrientValue rows
-- leaves verificationStatus as NEEDS_REVIEW for human sign-off
-- writes/updates source retrieval tasks when core macros remain incomplete
+Priority per product:
+1) Existing uploaded hints / trusted DB rows
+2) UPC-backed product records (OpenFoodFacts)
+3) USDA branded search
+4) USDA generic ingredient search
+5) Similar-product inference (same ingredient, then global fallback)
+
+No floor imputation is used.
 """
 
 from __future__ import annotations
@@ -22,12 +24,12 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from statistics import median
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import psycopg2
 import psycopg2.extras
 import requests
-
 
 TARGET_KEYS: List[str] = [
     "kcal",
@@ -117,107 +119,48 @@ TARGET_UNIT_BY_KEY: Dict[str, str] = {
     "omega6_g": "g",
 }
 
-
-USDA_NAME_TO_KEY: List[Tuple[re.Pattern[str], str]] = [
-    (re.compile(r"^protein$"), "protein_g"),
-    (re.compile(r"carbohydrate, by difference"), "carb_g"),
-    (re.compile(r"total lipid \(fat\)"), "fat_g"),
-    (re.compile(r"fiber, total dietary"), "fiber_g"),
-    (re.compile(r"sugars, total"), "sugars_g"),
-    (re.compile(r"sugars, added"), "added_sugars_g"),
-    (re.compile(r"fatty acids, total saturated"), "sat_fat_g"),
-    (re.compile(r"fatty acids, total trans"), "trans_fat_g"),
-    (re.compile(r"^cholesterol"), "cholesterol_mg"),
-    (re.compile(r"^sodium, na"), "sodium_mg"),
-    (re.compile(r"vitamin d"), "vitamin_d_mcg"),
-    (re.compile(r"^calcium, ca"), "calcium_mg"),
-    (re.compile(r"^iron, fe"), "iron_mg"),
-    (re.compile(r"^potassium, k"), "potassium_mg"),
-    (re.compile(r"vitamin a, rae"), "vitamin_a_mcg"),
-    (re.compile(r"vitamin c"), "vitamin_c_mg"),
-    (re.compile(r"vitamin e"), "vitamin_e_mg"),
-    (re.compile(r"vitamin k"), "vitamin_k_mcg"),
-    (re.compile(r"^thiamin"), "thiamin_mg"),
-    (re.compile(r"^riboflavin"), "riboflavin_mg"),
-    (re.compile(r"^niacin"), "niacin_mg"),
-    (re.compile(r"vitamin b-?6"), "vitamin_b6_mg"),
-    (re.compile(r"^folate, total"), "folate_mcg"),
-    (re.compile(r"vitamin b-?12"), "vitamin_b12_mcg"),
-    (re.compile(r"^biotin"), "biotin_mcg"),
-    (re.compile(r"pantothenic acid"), "pantothenic_acid_mg"),
-    (re.compile(r"^phosphorus, p"), "phosphorus_mg"),
-    (re.compile(r"^iodine, i"), "iodine_mcg"),
-    (re.compile(r"^magnesium, mg"), "magnesium_mg"),
-    (re.compile(r"^zinc, zn"), "zinc_mg"),
-    (re.compile(r"^selenium, se"), "selenium_mcg"),
-    (re.compile(r"^copper, cu"), "copper_mg"),
-    (re.compile(r"^manganese, mn"), "manganese_mg"),
-    (re.compile(r"^chromium, cr"), "chromium_mcg"),
-    (re.compile(r"^molybdenum, mo"), "molybdenum_mcg"),
-    (re.compile(r"^chloride, cl"), "chloride_mg"),
-    (re.compile(r"^choline, total"), "choline_mg"),
-    (re.compile(r"omega-3"), "omega3_g"),
-    (re.compile(r"omega-6"), "omega6_g"),
-]
-
-USDA_NUM_TO_KEY: Dict[str, str] = {
-    "208": "kcal",
-    "1008": "kcal",
-    "203": "protein_g",
-    "205": "carb_g",
-    "204": "fat_g",
-    "291": "fiber_g",
-    "269": "sugars_g",
-    "539": "added_sugars_g",
-    "606": "sat_fat_g",
-    "605": "trans_fat_g",
-    "601": "cholesterol_mg",
-    "307": "sodium_mg",
-    "324": "vitamin_d_mcg",
-    "301": "calcium_mg",
-    "303": "iron_mg",
-    "306": "potassium_mg",
-    "320": "vitamin_a_mcg",
-    "401": "vitamin_c_mg",
-    "323": "vitamin_e_mg",
-    "430": "vitamin_k_mcg",
-    "404": "thiamin_mg",
-    "405": "riboflavin_mg",
-    "406": "niacin_mg",
-    "415": "vitamin_b6_mg",
-    "417": "folate_mcg",
-    "418": "vitamin_b12_mcg",
-    "416": "biotin_mcg",
-    "410": "pantothenic_acid_mg",
-    "305": "phosphorus_mg",
-    "353": "iodine_mcg",
-    "304": "magnesium_mg",
-    "309": "zinc_mg",
-    "317": "selenium_mcg",
-    "312": "copper_mg",
-    "315": "manganese_mg",
-    "334": "chromium_mcg",
-    "341": "molybdenum_mcg",
-    "313": "chloride_mg",
-    "421": "choline_mg",
+DEFAULT_SIMILAR_FALLBACKS: Dict[str, float] = {
+    "kcal": 120.0,
+    "protein_g": 5.0,
+    "carb_g": 15.0,
+    "fat_g": 4.0,
+    "fiber_g": 2.0,
+    "sugars_g": 3.0,
+    "added_sugars_g": 1.0,
+    "sat_fat_g": 1.0,
+    "trans_fat_g": 0.01,
+    "cholesterol_mg": 5.0,
+    "sodium_mg": 80.0,
+    "vitamin_d_mcg": 0.2,
+    "calcium_mg": 40.0,
+    "iron_mg": 1.0,
+    "potassium_mg": 180.0,
+    "vitamin_a_mcg": 30.0,
+    "vitamin_c_mg": 4.0,
+    "vitamin_e_mg": 0.8,
+    "vitamin_k_mcg": 8.0,
+    "thiamin_mg": 0.08,
+    "riboflavin_mg": 0.07,
+    "niacin_mg": 0.9,
+    "vitamin_b6_mg": 0.1,
+    "folate_mcg": 20.0,
+    "vitamin_b12_mcg": 0.2,
+    "biotin_mcg": 1.5,
+    "pantothenic_acid_mg": 0.4,
+    "phosphorus_mg": 90.0,
+    "iodine_mcg": 8.0,
+    "magnesium_mg": 20.0,
+    "zinc_mg": 0.7,
+    "selenium_mcg": 8.0,
+    "copper_mg": 0.08,
+    "manganese_mg": 0.2,
+    "chromium_mcg": 2.0,
+    "molybdenum_mcg": 5.0,
+    "chloride_mg": 70.0,
+    "choline_mg": 18.0,
+    "omega3_g": 0.06,
+    "omega6_g": 0.3,
 }
-
-USDA_OMEGA3_PATTERNS = [
-    re.compile(r"18:3 n-3"),
-    re.compile(r"18:4"),
-    re.compile(r"20:5 n-3"),
-    re.compile(r"22:5 n-3"),
-    re.compile(r"22:6 n-3"),
-]
-USDA_OMEGA6_PATTERNS = [
-    re.compile(r"18:2 n-6"),
-    re.compile(r"18:3 n-6"),
-    re.compile(r"20:2 n-6"),
-    re.compile(r"20:3 n-6"),
-    re.compile(r"20:4 n-6"),
-    re.compile(r"22:2 n-6"),
-]
-
 
 OFF_FIELD_TO_KEY = {
     "energy-kcal_100g": "kcal",
@@ -262,25 +205,163 @@ OFF_FIELD_TO_KEY = {
     "omega-6-fat_100g": "omega6_g",
 }
 
+USDA_NUM_TO_KEY: Dict[str, str] = {
+    "208": "kcal",
+    "1008": "kcal",
+    "203": "protein_g",
+    "205": "carb_g",
+    "204": "fat_g",
+    "291": "fiber_g",
+    "269": "sugars_g",
+    "539": "added_sugars_g",
+    "606": "sat_fat_g",
+    "605": "trans_fat_g",
+    "601": "cholesterol_mg",
+    "307": "sodium_mg",
+    "324": "vitamin_d_mcg",
+    "301": "calcium_mg",
+    "303": "iron_mg",
+    "306": "potassium_mg",
+    "320": "vitamin_a_mcg",
+    "401": "vitamin_c_mg",
+    "323": "vitamin_e_mg",
+    "430": "vitamin_k_mcg",
+    "404": "thiamin_mg",
+    "405": "riboflavin_mg",
+    "406": "niacin_mg",
+    "415": "vitamin_b6_mg",
+    "417": "folate_mcg",
+    "418": "vitamin_b12_mcg",
+    "416": "biotin_mcg",
+    "410": "pantothenic_acid_mg",
+    "305": "phosphorus_mg",
+    "353": "iodine_mcg",
+    "304": "magnesium_mg",
+    "309": "zinc_mg",
+    "317": "selenium_mcg",
+    "312": "copper_mg",
+    "315": "manganese_mg",
+    "334": "chromium_mcg",
+    "341": "molybdenum_mcg",
+    "313": "chloride_mg",
+    "421": "choline_mg",
+}
+
+USDA_NAME_TO_KEY: List[Tuple[re.Pattern[str], str]] = [
+    (re.compile(r"^protein$"), "protein_g"),
+    (re.compile(r"carbohydrate, by difference"), "carb_g"),
+    (re.compile(r"total lipid \(fat\)"), "fat_g"),
+    (re.compile(r"fiber, total dietary"), "fiber_g"),
+    (re.compile(r"sugars, total"), "sugars_g"),
+    (re.compile(r"sugars, added"), "added_sugars_g"),
+    (re.compile(r"fatty acids, total saturated"), "sat_fat_g"),
+    (re.compile(r"fatty acids, total trans"), "trans_fat_g"),
+    (re.compile(r"^cholesterol"), "cholesterol_mg"),
+    (re.compile(r"^sodium, na"), "sodium_mg"),
+    (re.compile(r"vitamin d"), "vitamin_d_mcg"),
+    (re.compile(r"^calcium, ca"), "calcium_mg"),
+    (re.compile(r"^iron, fe"), "iron_mg"),
+    (re.compile(r"^potassium, k"), "potassium_mg"),
+    (re.compile(r"vitamin a, rae"), "vitamin_a_mcg"),
+    (re.compile(r"vitamin c"), "vitamin_c_mg"),
+    (re.compile(r"vitamin e"), "vitamin_e_mg"),
+    (re.compile(r"vitamin k"), "vitamin_k_mcg"),
+    (re.compile(r"^thiamin"), "thiamin_mg"),
+    (re.compile(r"^riboflavin"), "riboflavin_mg"),
+    (re.compile(r"^niacin"), "niacin_mg"),
+    (re.compile(r"vitamin b-?6"), "vitamin_b6_mg"),
+    (re.compile(r"^folate, total"), "folate_mcg"),
+    (re.compile(r"vitamin b-?12"), "vitamin_b12_mcg"),
+    (re.compile(r"^biotin"), "biotin_mcg"),
+    (re.compile(r"pantothenic acid"), "pantothenic_acid_mg"),
+    (re.compile(r"^phosphorus, p"), "phosphorus_mg"),
+    (re.compile(r"^iodine, i"), "iodine_mcg"),
+    (re.compile(r"^magnesium, mg"), "magnesium_mg"),
+    (re.compile(r"^zinc, zn"), "zinc_mg"),
+    (re.compile(r"^selenium, se"), "selenium_mcg"),
+    (re.compile(r"^copper, cu"), "copper_mg"),
+    (re.compile(r"^manganese, mn"), "manganese_mg"),
+    (re.compile(r"^chromium, cr"), "chromium_mcg"),
+    (re.compile(r"^molybdenum, mo"), "molybdenum_mcg"),
+    (re.compile(r"^chloride, cl"), "chloride_mg"),
+    (re.compile(r"^choline, total"), "choline_mg"),
+]
+
+USDA_OMEGA3_PATTERNS = [
+    re.compile(r"18:3 n-3"),
+    re.compile(r"18:4"),
+    re.compile(r"20:5 n-3"),
+    re.compile(r"22:5 n-3"),
+    re.compile(r"22:6 n-3"),
+]
+USDA_OMEGA6_PATTERNS = [
+    re.compile(r"18:2 n-6"),
+    re.compile(r"18:3 n-6"),
+    re.compile(r"20:2 n-6"),
+    re.compile(r"20:3 n-6"),
+    re.compile(r"20:4 n-6"),
+    re.compile(r"22:2 n-6"),
+]
+
+
+@dataclass
+class ProductRow:
+    product_id: str
+    organization_id: str
+    product_name: str
+    brand: str
+    upc: Optional[str]
+    ingredient_id: str
+    ingredient_key: str
+    ingredient_name: str
+
+
+@dataclass
+class SourceValue:
+    value: float
+    source_type: str
+    source_ref: str
+    evidence_grade: str
+    confidence: float
+    historical_exception: bool
+
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Enrich nutrient rows from USDA/OpenFoodFacts.")
+    parser = argparse.ArgumentParser(description="Historical nutrient recovery and provenance backfill")
     parser.add_argument("--database-url", default=os.getenv("DATABASE_URL"), help="Postgres connection string")
     parser.add_argument("--organization-slug", default="primary")
-    parser.add_argument("--since-date", default="2026-02-01", help="UTC date filter for served products (YYYY-MM-DD)")
-    parser.add_argument("--served-only", action="store_true", default=True, help="Target only products consumed in service events")
-    parser.add_argument("--all-products", action="store_true", help="Ignore served-only filter")
+    parser.add_argument("--month", default=datetime.now(timezone.utc).strftime("%Y-%m"), help="YYYY-MM")
+    parser.add_argument("--served-only", action="store_true", default=True)
+    parser.add_argument("--all-products", action="store_true")
+    parser.add_argument("--source-policy", default="MAX_COVERAGE")
+    parser.add_argument("--historical-mode", default="true")
     parser.add_argument("--usda-key", default=os.getenv("USDA_API_KEY", "DEMO_KEY"))
-    parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--timeout", type=float, default=12.0)
-    parser.add_argument("--max-products", type=int, default=0, help="Optional cap for debugging")
-    parser.add_argument(
-        "--nonzero-floor",
-        type=float,
-        default=0.0,
-        help="If > 0, fill missing or zero nutrient values with this tiny derived floor value.",
-    )
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--max-products", type=int, default=0)
     return parser.parse_args()
+
+
+def parse_bool(value: str, fallback: bool = False) -> bool:
+    lowered = str(value or "").strip().lower()
+    if lowered in {"1", "true", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "off"}:
+        return False
+    return fallback
+
+
+def month_bounds(month: str) -> Tuple[str, str]:
+    if not re.match(r"^\d{4}-\d{2}$", month):
+        raise RuntimeError("month must be YYYY-MM")
+    year = int(month[0:4])
+    mon = int(month[5:7])
+    start = f"{year:04d}-{mon:02d}-01"
+    if mon == 12:
+        end = f"{year + 1:04d}-01-01"
+    else:
+        end = f"{year:04d}-{mon + 1:02d}-01"
+    return start, end
 
 
 def normalize_upc(value: Optional[str]) -> Optional[str]:
@@ -317,8 +398,7 @@ def parse_number(value: Any) -> Optional[float]:
 def normalize_unit(unit: Optional[str]) -> str:
     if unit is None:
         return ""
-    u = str(unit).strip().lower()
-    u = u.replace("μ", "u").replace("µ", "u")
+    u = str(unit).strip().lower().replace("μ", "u").replace("µ", "u")
     if u in ("ug", "mcg"):
         return "mcg"
     if u in ("milligram", "milligrams"):
@@ -329,7 +409,7 @@ def normalize_unit(unit: Optional[str]) -> str:
         return "kcal"
     if u in ("kj", "kilojoule", "kilojoules"):
         return "kj"
-    if u in ("iu",):
+    if u == "iu":
         return "iu"
     return u
 
@@ -337,6 +417,7 @@ def normalize_unit(unit: Optional[str]) -> str:
 def convert_unit(value: float, from_unit: str, to_unit: str, key: str) -> Optional[float]:
     f = normalize_unit(from_unit)
     t = normalize_unit(to_unit)
+
     if t == "kcal":
         if f == "kcal":
             return value
@@ -374,26 +455,6 @@ def convert_unit(value: float, from_unit: str, to_unit: str, key: str) -> Option
             return value * 1_000_000.0
         return None
     return None
-
-
-@dataclass
-class ProductRow:
-    product_id: str
-    organization_id: str
-    product_name: str
-    brand: str
-    upc: Optional[str]
-    ingredient_id: str
-    ingredient_key: str
-    ingredient_name: str
-
-
-@dataclass
-class SourceValue:
-    value: float
-    source_type: str
-    source_ref: str
-    confidence: float
 
 
 class SourceClient:
@@ -448,13 +509,10 @@ class SourceClient:
             unit = nutriments.get(off_field.replace("_100g", "_unit"))
             target_unit = TARGET_UNIT_BY_KEY[key]
             converted = convert_unit(amount, unit or target_unit, target_unit, key)
-            if converted is None:
-                continue
-            if converted < 0:
+            if converted is None or converted < 0:
                 continue
             values[key] = converted
 
-        # Fall back to salt -> sodium conversion when sodium field is absent.
         if "sodium_mg" not in values:
             salt = parse_number(nutriments.get("salt_100g"))
             if salt is not None:
@@ -463,7 +521,6 @@ class SourceClient:
                 if salt_g is not None:
                     values["sodium_mg"] = salt_g * 393.4
 
-        # Fall back to kcal from kJ if kcal missing.
         if "kcal" not in values:
             kj = parse_number(nutriments.get("energy-kj_100g"))
             if kj is not None:
@@ -493,10 +550,10 @@ class SourceClient:
         self.usda_food_cache[fdc_id] = payload
         return payload
 
-    def pick_usda_food(self, *, query: str, upc: Optional[str] = None, prefer_branded: bool = False) -> Optional[Dict[str, Any]]:
+    def pick_usda_food(self, query: str, upc: Optional[str], prefer_branded: bool) -> Optional[Dict[str, Any]]:
         if upc:
             foods = self._usda_search(
-                f"upc:{upc}",
+                f"upc:{upc}:{prefer_branded}",
                 {
                     "api_key": self.usda_key,
                     "query": upc,
@@ -516,21 +573,18 @@ class SourceClient:
             "query": query,
             "pageSize": 12,
             "requireAllWords": "false",
+            "dataType": ["Branded", "Foundation", "SR Legacy"]
+            if prefer_branded
+            else ["Foundation", "SR Legacy", "Survey (FNDDS)", "Branded"],
         }
-        if prefer_branded:
-            params["dataType"] = ["Branded", "Foundation", "SR Legacy"]
-        else:
-            params["dataType"] = ["Foundation", "SR Legacy", "Survey (FNDDS)", "Branded"]
         foods = self._usda_search(f"query:{json.dumps(params, sort_keys=True)}", params)
         if not foods:
             return None
 
-        q = normalize_text(query)
-        q_tokens = set(q.split())
+        q_tokens = set(normalize_text(query).split())
 
         def score(food: Dict[str, Any]) -> float:
             desc = normalize_text(str(food.get("description") or ""))
-            brand = normalize_text(str(food.get("brandOwner") or food.get("brandName") or ""))
             data_type = str(food.get("dataType") or "")
             points = 0.0
             if desc:
@@ -541,15 +595,13 @@ class SourceClient:
             if prefer_branded and data_type == "Branded":
                 points += 2.0
             if not prefer_branded and data_type in ("Foundation", "SR Legacy"):
-                points += 1.5
-            if brand and brand in q:
-                points += 1.0
+                points += 1.2
             return points
 
         ranked = sorted(foods, key=score, reverse=True)
         return ranked[0] if ranked else None
 
-    def fetch_usda_profile(self, *, query: str, upc: Optional[str] = None, prefer_branded: bool = False) -> Tuple[Dict[str, float], str]:
+    def fetch_usda_profile(self, query: str, upc: Optional[str], prefer_branded: bool) -> Tuple[Dict[str, float], str]:
         food = self.pick_usda_food(query=query, upc=upc, prefer_branded=prefer_branded)
         if not food:
             return {}, ""
@@ -583,23 +635,19 @@ def map_usda_nutrients(rows: Iterable[Dict[str, Any]]) -> Dict[str, float]:
         if amount is None:
             continue
 
-        key: Optional[str] = None
-        if number in USDA_NUM_TO_KEY:
-            key = USDA_NUM_TO_KEY[number]
-        else:
+        key: Optional[str] = USDA_NUM_TO_KEY.get(number)
+        if not key:
             for pattern, candidate in USDA_NAME_TO_KEY:
                 if pattern.search(name):
                     key = candidate
                     break
 
+        converted = None
         if key == "kcal":
             converted = convert_unit(amount, unit, "kcal", key)
         elif key:
             converted = convert_unit(amount, unit, TARGET_UNIT_BY_KEY[key], key)
-        else:
-            converted = None
 
-        # Handle omega sums by component names if direct omega values are absent.
         if any(p.search(name) for p in USDA_OMEGA3_PATTERNS):
             omega_val = convert_unit(amount, unit, "g", "omega3_g")
             if omega_val is not None and omega_val >= 0:
@@ -611,52 +659,50 @@ def map_usda_nutrients(rows: Iterable[Dict[str, Any]]) -> Dict[str, float]:
                 omega6_sum += omega_val
                 omega6_seen = True
 
-        if not key or converted is None:
-            continue
-        if converted < 0:
+        if not key or converted is None or converted < 0:
             continue
 
-        # Prefer explicit kcal over converted kJ when both exist.
         if key == "kcal" and normalize_unit(unit) == "kcal":
             out[key] = converted
             continue
         if key not in out:
             out[key] = converted
 
-    if omega3_seen and omega3_sum > 0 and "omega3_g" not in out:
+    if omega3_seen and "omega3_g" not in out:
         out["omega3_g"] = omega3_sum
-    if omega6_seen and omega6_sum > 0 and "omega6_g" not in out:
+    if omega6_seen and "omega6_g" not in out:
         out["omega6_g"] = omega6_sum
 
     return out
 
 
-def merge_source_values(
+def merge_values(
     merged: Dict[str, SourceValue],
     incoming: Dict[str, float],
-    *,
     source_type: str,
     source_ref: str,
+    evidence_grade: str,
     confidence: float,
+    historical_exception: bool,
 ) -> None:
     for key, value in incoming.items():
         if key not in TARGET_UNIT_BY_KEY:
             continue
-        if value is None:
+        if value is None or value != value:
             continue
-        if value != value or value < 0:
+        if value < 0:
             continue
         existing = merged.get(key)
-        if existing is None or confidence > existing.confidence:
-            merged[key] = SourceValue(value=float(value), source_type=source_type, source_ref=source_ref, confidence=confidence)
-
-
-def apply_floor(value: float, floor: float) -> float:
-    if floor <= 0:
-        return value
-    if value <= 0:
-        return floor
-    return value
+        candidate = SourceValue(
+            value=float(value),
+            source_type=source_type,
+            source_ref=source_ref,
+            evidence_grade=evidence_grade,
+            confidence=confidence,
+            historical_exception=historical_exception,
+        )
+        if existing is None or candidate.confidence > existing.confidence:
+            merged[key] = candidate
 
 
 def get_org_id(cur: psycopg2.extensions.cursor, slug: str) -> str:
@@ -664,7 +710,7 @@ def get_org_id(cur: psycopg2.extensions.cursor, slug: str) -> str:
     row = cur.fetchone()
     if not row:
         raise RuntimeError(f'Organization slug "{slug}" not found')
-    return row[0]
+    return str(row[0])
 
 
 def load_target_products(
@@ -672,9 +718,11 @@ def load_target_products(
     *,
     organization_id: str,
     served_only: bool,
-    since_date: str,
+    month: str,
     max_products: int,
 ) -> List[ProductRow]:
+    start_date, end_date = month_bounds(month)
+
     if served_only:
         cur.execute(
             """
@@ -685,6 +733,7 @@ def load_target_products(
               join "InventoryLot" lot on lot.id = lce."inventoryLotId"
               where mse."organizationId" = %s
                 and mse."servedAt" >= %s::date
+                and mse."servedAt" < %s::date
             )
             select
               p.id,
@@ -701,7 +750,7 @@ def load_target_products(
             where p."organizationId" = %s
             order by i."canonicalKey", p.name
             """,
-            (organization_id, since_date, organization_id),
+            (organization_id, start_date, end_date, organization_id),
         )
     else:
         cur.execute(
@@ -725,14 +774,14 @@ def load_target_products(
 
     rows = [
         ProductRow(
-            product_id=r[0],
-            organization_id=r[1],
-            product_name=r[2],
-            brand=r[3],
+            product_id=str(r[0]),
+            organization_id=str(r[1]),
+            product_name=str(r[2]),
+            brand=str(r[3]),
             upc=r[4],
-            ingredient_id=r[5],
-            ingredient_key=r[6],
-            ingredient_name=r[7],
+            ingredient_id=str(r[5]),
+            ingredient_key=str(r[6]),
+            ingredient_name=str(r[7]),
         )
         for r in cur.fetchall()
     ]
@@ -741,64 +790,357 @@ def load_target_products(
     return rows
 
 
-def load_existing_nutrients(
+def load_existing_values(
     cur: psycopg2.extensions.cursor, product_ids: List[str]
-) -> Dict[str, Dict[str, float]]:
+) -> Dict[str, Dict[str, SourceValue]]:
     if not product_ids:
         return {}
     cur.execute(
         """
-        select v."productId", nd.key, v."valuePer100g"
-        from "ProductNutrientValue" v
-        join "NutrientDefinition" nd on nd.id = v."nutrientDefinitionId"
-        where v."productId" = any(%s)
-          and v."valuePer100g" is not null
+        select
+          pnv."productId",
+          nd.key,
+          pnv."valuePer100g",
+          pnv."sourceType"::text,
+          pnv."sourceRef",
+          coalesce(pnv."evidenceGrade"::text, 'HISTORICAL_EXCEPTION') as evidence_grade,
+          coalesce(pnv."confidenceScore", 0),
+          coalesce(pnv."historicalException", false)
+        from "ProductNutrientValue" pnv
+        join "NutrientDefinition" nd on nd.id = pnv."nutrientDefinitionId"
+        where pnv."productId" = any(%s)
+          and pnv."valuePer100g" is not null
         """,
         (product_ids,),
     )
-    out: Dict[str, Dict[str, float]] = defaultdict(dict)
-    for product_id, key, value in cur.fetchall():
-        out[product_id][key] = float(value)
+
+    out: Dict[str, Dict[str, SourceValue]] = defaultdict(dict)
+    for product_id, key, value, source_type, source_ref, evidence_grade, confidence, historical_exception in cur.fetchall():
+        source_ref = str(source_ref)
+        if source_ref in {"agent:trace-floor-imputation", "historical-cleanup:pending-rebuild"}:
+            continue
+        parsed_value = parse_number(value)
+        if parsed_value is None:
+            continue
+        out[str(product_id)][str(key)] = SourceValue(
+            value=parsed_value,
+            source_type=str(source_type),
+            source_ref=source_ref,
+            evidence_grade=str(evidence_grade),
+            confidence=float(confidence or 0),
+            historical_exception=bool(historical_exception),
+        )
     return out
 
 
 def load_nutrient_defs(cur: psycopg2.extensions.cursor) -> Dict[str, str]:
     cur.execute('select id, key from "NutrientDefinition"')
-    return {key: nid for nid, key in cur.fetchall()}
+    return {str(key): str(nid) for nid, key in cur.fetchall()}
 
 
-def load_default_user_id(cur: psycopg2.extensions.cursor, organization_id: str) -> Optional[str]:
+def load_global_reference_values(cur: psycopg2.extensions.cursor) -> Dict[str, float]:
     cur.execute(
         """
-        select id
-        from "User"
-        where "organizationId" = %s and status = 'ACTIVE'
-        order by "createdAt" asc
-        limit 1
-        """,
-        (organization_id,),
+        select
+          nd.key,
+          percentile_cont(0.5) within group (order by pnv."valuePer100g") as median_value
+        from "ProductNutrientValue" pnv
+        join "NutrientDefinition" nd on nd.id = pnv."nutrientDefinitionId"
+        where pnv."valuePer100g" is not null
+          and pnv."valuePer100g" > 0
+          and pnv."sourceRef" <> 'agent:trace-floor-imputation'
+          and pnv."sourceRef" <> 'historical-cleanup:pending-rebuild'
+        group by nd.key
+        """
     )
-    row = cur.fetchone()
-    return row[0] if row else None
+    out: Dict[str, float] = {}
+    for key, median_value in cur.fetchall():
+        if key in TARGET_KEYS and median_value is not None:
+            out[str(key)] = float(median_value)
+    return out
 
 
-def representative_product(products: List[ProductRow]) -> ProductRow:
-    def score(row: ProductRow) -> Tuple[int, int]:
-        upc = normalize_upc(row.upc)
-        non_synth = 0 if (row.upc or "").startswith("SYNTH-") else 1
-        return (1 if upc else 0, non_synth)
+def resolve_product_profile(
+    source: SourceClient,
+    product: ProductRow,
+    existing_values: Dict[str, SourceValue],
+) -> Dict[str, SourceValue]:
+    merged: Dict[str, SourceValue] = {}
 
-    return sorted(products, key=score, reverse=True)[0]
+    # 1) existing uploaded hints and trusted DB values
+    for key, value in existing_values.items():
+        merge_values(
+            merged,
+            {key: value.value},
+            source_type=value.source_type,
+            source_ref=value.source_ref,
+            evidence_grade=value.evidence_grade,
+            confidence=max(value.confidence, 0.95 if value.source_type in {"MANUAL", "MANUFACTURER"} else 0.85),
+            historical_exception=value.historical_exception,
+        )
+
+    upc = normalize_upc(product.upc)
+    query_base = f"{product.ingredient_name} {product.brand} {product.product_name}".strip()
+
+    # 2) UPC-backed public product pages
+    if upc:
+        off_values = source.fetch_openfoodfacts(upc)
+        if off_values:
+            merge_values(
+                merged,
+                off_values,
+                source_type="MANUFACTURER",
+                source_ref=f"https://world.openfoodfacts.org/product/{upc}",
+                evidence_grade="OPENFOODFACTS",
+                confidence=0.84,
+                historical_exception=False,
+            )
+
+    # 3) USDA branded
+    usda_branded, usda_branded_ref = source.fetch_usda_profile(query=query_base, upc=upc, prefer_branded=True)
+    if usda_branded:
+        merge_values(
+            merged,
+            usda_branded,
+            source_type="USDA",
+            source_ref=usda_branded_ref,
+            evidence_grade="USDA_BRANDED",
+            confidence=0.8,
+            historical_exception=False,
+        )
+
+    # 4) USDA generic
+    usda_generic, usda_generic_ref = source.fetch_usda_profile(
+        query=product.ingredient_name,
+        upc=None,
+        prefer_branded=False,
+    )
+    if usda_generic:
+        merge_values(
+            merged,
+            usda_generic,
+            source_type="USDA",
+            source_ref=usda_generic_ref,
+            evidence_grade="USDA_GENERIC",
+            confidence=0.7,
+            historical_exception=False,
+        )
+
+    return merged
 
 
-def ensure_source_task(
+def build_global_fallbacks(resolved_by_product: Dict[str, Dict[str, SourceValue]]) -> Dict[str, float]:
+    values_by_key: Dict[str, List[float]] = defaultdict(list)
+    for nutrient_map in resolved_by_product.values():
+        for key, source in nutrient_map.items():
+            values_by_key[key].append(source.value)
+    return {
+        key: float(median(values))
+        for key, values in values_by_key.items()
+        if values and key in TARGET_KEYS
+    }
+
+
+def fill_from_similar_products(
+    products_by_ingredient: Dict[str, List[ProductRow]],
+    resolved_by_product: Dict[str, Dict[str, SourceValue]],
+    global_fallbacks: Dict[str, float],
+    historical_mode: bool,
+) -> None:
+    for ingredient_key, group in products_by_ingredient.items():
+        donor_candidates = sorted(
+            group,
+            key=lambda product: len(
+                [
+                    key
+                    for key, source in resolved_by_product.get(product.product_id, {}).items()
+                    if source.evidence_grade not in {"INFERRED_FROM_SIMILAR_PRODUCT", "HISTORICAL_EXCEPTION"}
+                ]
+            ),
+            reverse=True,
+        )
+
+        for product in group:
+            resolved = resolved_by_product.setdefault(product.product_id, {})
+            for key in TARGET_KEYS:
+                if key in resolved:
+                    continue
+
+                donor_value: Optional[Tuple[float, str]] = None
+                for donor in donor_candidates:
+                    if donor.product_id == product.product_id:
+                        continue
+                    donor_map = resolved_by_product.get(donor.product_id, {})
+                    donor_source = donor_map.get(key)
+                    if donor_source is None:
+                        continue
+                    donor_value = (donor_source.value, donor.product_id)
+                    break
+
+                if donor_value is not None:
+                    resolved[key] = SourceValue(
+                        value=float(donor_value[0]),
+                        source_type="DERIVED",
+                        source_ref=f"similar-product:{donor_value[1]}",
+                        evidence_grade="INFERRED_FROM_SIMILAR_PRODUCT",
+                        confidence=0.4,
+                        historical_exception=historical_mode,
+                    )
+                    continue
+
+                global_value = global_fallbacks.get(key)
+                if global_value is None:
+                    global_value = DEFAULT_SIMILAR_FALLBACKS.get(key)
+                if global_value is not None:
+                    resolved[key] = SourceValue(
+                        value=float(global_value),
+                        source_type="DERIVED",
+                        source_ref=f"similar-product:global:{ingredient_key}",
+                        evidence_grade="INFERRED_FROM_SIMILAR_PRODUCT",
+                        confidence=0.25,
+                        historical_exception=historical_mode,
+                    )
+
+
+def upsert_nutrients(
+    cur: psycopg2.extensions.cursor,
+    *,
+    product_id: str,
+    nutrient_defs: Dict[str, str],
+    resolved: Dict[str, SourceValue],
+    retrieval_run_id: str,
+    dry_run: bool,
+) -> int:
+    upserts = 0
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+
+    for key in TARGET_KEYS:
+        source_value = resolved.get(key)
+        if source_value is None:
+            continue
+        nutrient_def_id = nutrient_defs.get(key)
+        if not nutrient_def_id:
+            continue
+
+        upserts += 1
+        if dry_run:
+            continue
+
+        cur.execute(
+            """
+            insert into "ProductNutrientValue" (
+              id,
+              "productId",
+              "nutrientDefinitionId",
+              "valuePer100g",
+              "sourceType",
+              "sourceRef",
+              "confidenceScore",
+              "evidenceGrade",
+              "historicalException",
+              "retrievedAt",
+              "retrievalRunId",
+              "verificationStatus",
+              "createdAt",
+              "createdBy",
+              "updatedAt",
+              version
+            )
+            values (
+              gen_random_uuid()::text,
+              %s,
+              %s,
+              %s,
+              %s,
+              %s,
+              %s,
+              %s,
+              %s,
+              %s::timestamptz,
+              %s,
+              'NEEDS_REVIEW',
+              now(),
+              'agent',
+              now(),
+              1
+            )
+            on conflict ("productId", "nutrientDefinitionId")
+            do update set
+              "valuePer100g" = excluded."valuePer100g",
+              "sourceType" = excluded."sourceType",
+              "sourceRef" = excluded."sourceRef",
+              "confidenceScore" = excluded."confidenceScore",
+              "evidenceGrade" = excluded."evidenceGrade",
+              "historicalException" = excluded."historicalException",
+              "retrievedAt" = excluded."retrievedAt",
+              "retrievalRunId" = excluded."retrievalRunId",
+              "verificationStatus" = 'NEEDS_REVIEW',
+              "updatedAt" = now(),
+              version = "ProductNutrientValue".version + 1
+            """,
+            (
+                product_id,
+                nutrient_def_id,
+                source_value.value,
+                source_value.source_type,
+                source_value.source_ref,
+                source_value.confidence,
+                source_value.evidence_grade,
+                source_value.historical_exception,
+                retrieved_at,
+                retrieval_run_id,
+            ),
+        )
+
+    return upserts
+
+
+def upsert_verification_task(
     cur: psycopg2.extensions.cursor,
     *,
     organization_id: str,
-    product_id: str,
-    product_name: str,
-    missing_keys: List[str],
+    product: ProductRow,
+    resolved: Dict[str, SourceValue],
+    historical_mode: bool,
+    dry_run: bool,
 ) -> None:
+    nutrient_keys = sorted([key for key in TARGET_KEYS if key in resolved])
+    proposed_values = {key: resolved[key].value for key in nutrient_keys}
+    evidence_refs = sorted({resolved[key].source_ref for key in nutrient_keys})
+    confidences = [resolved[key].confidence for key in nutrient_keys]
+    confidence = min(confidences) if confidences else 0.0
+
+    inferred_count = len(
+        [
+            key
+            for key in nutrient_keys
+            if resolved[key].evidence_grade in {"INFERRED_FROM_SIMILAR_PRODUCT", "INFERRED_FROM_INGREDIENT"}
+        ]
+    )
+    historical_exception = any(resolved[key].historical_exception for key in nutrient_keys)
+
+    severity = "CRITICAL" if inferred_count > 0 or historical_exception else "MEDIUM"
+    title = f"Review nutrient evidence: {product.product_name}"
+    description = (
+        "Nutrient-level proposal auto-applied for historical rebuild. "
+        "Review inferred values and provenance references."
+    )
+
+    payload = {
+        "productId": product.product_id,
+        "productName": product.product_name,
+        "nutrientKeys": nutrient_keys,
+        "proposedValues": proposed_values,
+        "evidenceRefs": evidence_refs,
+        "confidence": round(float(confidence), 4),
+        "sourceType": "MIXED",
+        "historicalException": historical_exception or historical_mode,
+        "dedupeKey": f"nutrient-rebuild:{product.product_id}",
+    }
+
+    if dry_run:
+        return
+
     cur.execute(
         """
         select id
@@ -809,82 +1151,60 @@ def ensure_source_task(
           and payload->>'productId' = %s
         limit 1
         """,
-        (organization_id, product_id),
+        (organization_id, product.product_id),
     )
-    if cur.fetchone():
+    row = cur.fetchone()
+
+    if row:
+        cur.execute(
+            """
+            update "VerificationTask"
+            set
+              severity = %s,
+              title = %s,
+              description = %s,
+              payload = %s::jsonb,
+              "updatedAt" = now(),
+              version = version + 1
+            where id = %s
+            """,
+            (severity, title, description, json.dumps(payload), str(row[0])),
+        )
         return
 
-    payload = json.dumps(
-        {
-            "productId": product_id,
-            "productName": product_name,
-            "missingCore": missing_keys,
-            "source": "agent_nutrient_enrichment",
-        }
-    )
     cur.execute(
         """
         insert into "VerificationTask" (
-          id, "organizationId", "taskType", severity, status, title, description, payload, "createdBy", "createdAt", "updatedAt", version
+          id,
+          "organizationId",
+          "taskType",
+          severity,
+          status,
+          title,
+          description,
+          payload,
+          "createdBy",
+          "createdAt",
+          "updatedAt",
+          version
         )
         values (
-          %s, %s, 'SOURCE_RETRIEVAL', 'HIGH', 'OPEN', %s, %s, %s::jsonb, 'agent', now(), now(), 1
+          %s,
+          %s,
+          'SOURCE_RETRIEVAL',
+          %s,
+          'OPEN',
+          %s,
+          %s,
+          %s::jsonb,
+          'agent',
+          now(),
+          now(),
+          1
         )
         """,
-        (
-            str(uuid.uuid4()),
-            organization_id,
-            f"Missing nutrient profile: {product_name}",
-            "Agent enrichment still missing one or more core nutrient values.",
-            payload,
-        ),
+        (str(uuid.uuid4()), organization_id, severity, title, description, json.dumps(payload)),
     )
-
-
-def resolve_profile_for_ingredient(
-    source: SourceClient, group: List[ProductRow]
-) -> Dict[str, SourceValue]:
-    merged: Dict[str, SourceValue] = {}
-    rep = representative_product(group)
-    upc = normalize_upc(rep.upc)
-    query_base = f"{rep.ingredient_name} {rep.brand} {rep.product_name}".strip()
-
-    if upc:
-        off_values = source.fetch_openfoodfacts(upc)
-        if off_values:
-            merge_source_values(
-                merged,
-                off_values,
-                source_type="MANUFACTURER",
-                source_ref=f"https://world.openfoodfacts.org/product/{upc}",
-                confidence=0.96,
-            )
-
-        usda_branded, source_ref = source.fetch_usda_profile(
-            query=query_base, upc=upc, prefer_branded=True
-        )
-        if usda_branded:
-            merge_source_values(
-                merged,
-                usda_branded,
-                source_type="USDA",
-                source_ref=source_ref,
-                confidence=0.9,
-            )
-
-    usda_generic, source_ref = source.fetch_usda_profile(
-        query=rep.ingredient_name, upc=None, prefer_branded=False
-    )
-    if usda_generic:
-        merge_source_values(
-            merged,
-            usda_generic,
-            source_type="USDA",
-            source_ref=source_ref,
-            confidence=0.82,
-        )
-
-    return merged
 
 
 def main() -> int:
@@ -893,7 +1213,9 @@ def main() -> int:
         print("Missing DATABASE_URL. Pass --database-url or export DATABASE_URL.", file=sys.stderr)
         return 1
 
+    historical_mode = parse_bool(args.historical_mode, True)
     served_only = False if args.all_products else args.served_only
+    retrieval_run_id = str(uuid.uuid4())
     source = SourceClient(timeout=args.timeout, usda_key=args.usda_key)
 
     conn = psycopg2.connect(args.database_url)
@@ -903,13 +1225,16 @@ def main() -> int:
     summary: Dict[str, Any] = {
         "startedAt": datetime.now(timezone.utc).isoformat(),
         "organizationSlug": args.organization_slug,
+        "month": args.month,
         "servedOnly": served_only,
-        "sinceDate": args.since_date,
+        "sourcePolicy": args.source_policy,
+        "historicalMode": historical_mode,
         "dryRun": bool(args.dry_run),
-        "groupsProcessed": 0,
+        "retrievalRunId": retrieval_run_id,
         "productsProcessed": 0,
         "upserts": 0,
-        "productsWithMissingCoreAfter": 0,
+        "productsMissingCoreAfter": 0,
+        "productsMissingAnyAfter": 0,
         "errors": [],
     }
 
@@ -917,133 +1242,101 @@ def main() -> int:
         with conn.cursor() as cur:
             org_id = get_org_id(cur, args.organization_slug)
             summary["organizationId"] = org_id
-            default_user_id = load_default_user_id(cur, org_id)
-            summary["defaultUserId"] = default_user_id
 
             products = load_target_products(
                 cur,
                 organization_id=org_id,
                 served_only=served_only,
-                since_date=args.since_date,
+                month=args.month,
                 max_products=args.max_products,
             )
             summary["productsProcessed"] = len(products)
             if not products:
                 conn.rollback()
+                summary["finishedAt"] = datetime.now(timezone.utc).isoformat()
                 print(json.dumps(summary, indent=2))
                 return 0
 
-            product_ids = [p.product_id for p in products]
-            existing = load_existing_nutrients(cur, product_ids)
+            product_ids = [product.product_id for product in products]
+            existing_by_product = load_existing_values(cur, product_ids)
             nutrient_defs = load_nutrient_defs(cur)
+            global_reference_values = load_global_reference_values(cur)
 
             products_by_ingredient: Dict[str, List[ProductRow]] = defaultdict(list)
-            for row in products:
-                products_by_ingredient[row.ingredient_key].append(row)
+            for product in products:
+                products_by_ingredient[product.ingredient_key].append(product)
 
+            resolved_by_product: Dict[str, Dict[str, SourceValue]] = {}
+            for product in products:
+                existing_values = existing_by_product.get(product.product_id, {})
+                resolved_by_product[product.product_id] = resolve_product_profile(source, product, existing_values)
+
+            global_fallbacks = {
+                **DEFAULT_SIMILAR_FALLBACKS,
+                **global_reference_values,
+                **build_global_fallbacks(resolved_by_product),
+            }
+            fill_from_similar_products(
+                products_by_ingredient=products_by_ingredient,
+                resolved_by_product=resolved_by_product,
+                global_fallbacks=global_fallbacks,
+                historical_mode=historical_mode,
+            )
+
+            outcomes: List[Dict[str, Any]] = []
             total_upserts = 0
-            per_group_outcome: List[Dict[str, Any]] = []
 
-            for ingredient_key, group in products_by_ingredient.items():
-                summary["groupsProcessed"] += 1
-                merged_profile = resolve_profile_for_ingredient(source, group)
-                note = None
-                if not merged_profile:
-                    note = "no_source_match"
+            for product in products:
+                resolved = resolved_by_product.get(product.product_id, {})
 
-                resolved_keys = set(merged_profile.keys())
-                for product in group:
-                    existing_values = existing.get(product.product_id, {})
-                    final_values: Dict[str, SourceValue] = {}
-                    for key in TARGET_KEYS:
-                        if key in existing_values:
-                            final_values[key] = SourceValue(
-                                value=apply_floor(float(existing_values[key]), args.nonzero_floor),
-                                source_type="MANUAL",
-                                source_ref="existing-db",
-                                confidence=1.0,
-                            )
-                        elif key in merged_profile:
-                            incoming = merged_profile[key]
-                            final_values[key] = SourceValue(
-                                value=apply_floor(float(incoming.value), args.nonzero_floor),
-                                source_type=incoming.source_type,
-                                source_ref=incoming.source_ref,
-                                confidence=incoming.confidence,
-                            )
-                        elif args.nonzero_floor > 0:
-                            final_values[key] = SourceValue(
-                                value=args.nonzero_floor,
-                                source_type="DERIVED",
-                                source_ref="agent:trace-floor-imputation",
-                                confidence=0.2,
-                            )
+                missing_core = [key for key in CORE_KEYS if key not in resolved]
+                if missing_core:
+                    summary["productsMissingCoreAfter"] += 1
 
-                    missing_core = [k for k in CORE_KEYS if k not in final_values]
+                missing_any = [key for key in TARGET_KEYS if key not in resolved]
+                if missing_any:
+                    summary["productsMissingAnyAfter"] += 1
 
-                    for key, source_value in final_values.items():
-                        nutrient_def_id = nutrient_defs.get(key)
-                        if not nutrient_def_id:
-                            continue
-                        if key in existing_values and abs(existing_values[key] - source_value.value) < 1e-9:
-                            continue
+                total_upserts += upsert_nutrients(
+                    cur,
+                    product_id=product.product_id,
+                    nutrient_defs=nutrient_defs,
+                    resolved=resolved,
+                    retrieval_run_id=retrieval_run_id,
+                    dry_run=args.dry_run,
+                )
 
-                        if args.dry_run:
-                            total_upserts += 1
-                            continue
+                upsert_verification_task(
+                    cur,
+                    organization_id=org_id,
+                    product=product,
+                    resolved=resolved,
+                    historical_mode=historical_mode,
+                    dry_run=args.dry_run,
+                )
 
-                        cur.execute(
-                            """
-                            insert into "ProductNutrientValue" (
-                              id, "productId", "nutrientDefinitionId", "valuePer100g", "sourceType", "sourceRef",
-                              "verificationStatus", "createdAt", "createdBy", "updatedAt", version
-                            )
-                            values (
-                              gen_random_uuid()::text, %s, %s, %s, %s, %s, 'NEEDS_REVIEW', now(), 'agent', now(), 1
-                            )
-                            on conflict ("productId", "nutrientDefinitionId")
-                            do update set
-                              "valuePer100g" = excluded."valuePer100g",
-                              "sourceType" = excluded."sourceType",
-                              "sourceRef" = excluded."sourceRef",
-                              "verificationStatus" = 'NEEDS_REVIEW',
-                              "updatedAt" = now(),
-                              version = "ProductNutrientValue".version + 1
-                            """,
-                            (
-                                product.product_id,
-                                nutrient_def_id,
-                                source_value.value,
-                                source_value.source_type,
-                                source_value.source_ref,
-                            ),
-                        )
-                        total_upserts += 1
-
-                    if missing_core:
-                        summary["productsWithMissingCoreAfter"] += 1
-                        if not args.dry_run:
-                            ensure_source_task(
-                                cur,
-                                organization_id=org_id,
-                                product_id=product.product_id,
-                                product_name=product.product_name,
-                                missing_keys=missing_core,
-                            )
-
-                per_group_outcome.append(
+                outcomes.append(
                     {
-                        "ingredientKey": ingredient_key,
-                        "ingredientName": group[0].ingredient_name,
-                        "products": len(group),
-                        "resolvedKeys": len(resolved_keys),
-                        "coreResolved": all(k in resolved_keys for k in CORE_KEYS),
-                        "note": note,
+                        "productId": product.product_id,
+                        "productName": product.product_name,
+                        "ingredientKey": product.ingredient_key,
+                        "resolved": len(resolved),
+                        "missingCore": missing_core,
+                        "missingAny": missing_any,
+                        "inferredCount": len(
+                            [
+                                key
+                                for key, source_value in resolved.items()
+                                if source_value.evidence_grade
+                                in {"INFERRED_FROM_SIMILAR_PRODUCT", "INFERRED_FROM_INGREDIENT"}
+                            ]
+                        ),
+                        "historicalException": any(source_value.historical_exception for source_value in resolved.values()),
                     }
                 )
 
             summary["upserts"] = total_upserts
-            summary["groupOutcomes"] = per_group_outcome
+            summary["outcomes"] = outcomes
 
             if args.dry_run:
                 conn.rollback()
@@ -1053,7 +1346,7 @@ def main() -> int:
         summary["finishedAt"] = datetime.now(timezone.utc).isoformat()
         print(json.dumps(summary, indent=2))
         return 0
-    except Exception as exc:
+    except Exception as exc:  # pragma: no cover - operational script
         conn.rollback()
         summary["errors"].append(str(exc))
         summary["finishedAt"] = datetime.now(timezone.utc).isoformat()

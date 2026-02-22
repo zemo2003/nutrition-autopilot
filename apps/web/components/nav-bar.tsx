@@ -17,6 +17,7 @@ type HealthStatus = "connected" | "degraded" | "offline";
 const NAV_LINKS = [
   { href: "/", label: "Dashboard" },
   { href: "/calendar", label: "Calendar" },
+  { href: "/verification", label: "Verification" },
   { href: "/upload", label: "Upload" },
 ] as const;
 
@@ -49,6 +50,12 @@ export function NavBar() {
   const dotColor = health === "connected" ? "green" : health === "degraded" ? "amber" : "red";
   const statusLabel =
     health === "connected" ? "API Connected" : health === "degraded" ? "API Degraded" : "API Offline";
+  const isActive = (href: string) => {
+    if (pathname === href) return true;
+    if (href === "/calendar" && pathname?.startsWith("/clients/")) return true;
+    if (href === "/verification" && pathname?.startsWith("/verification")) return true;
+    return false;
+  };
 
   return (
     <>
@@ -63,9 +70,9 @@ export function NavBar() {
             {NAV_LINKS.map((link) => (
               <Link
                 key={link.href}
-                href={link.href}
+                href={link.href as any}
                 className="topnav-link"
-                data-active={pathname === link.href ? "true" : undefined}
+                data-active={isActive(link.href) ? "true" : undefined}
               >
                 {link.label}
               </Link>
@@ -93,8 +100,8 @@ export function NavBar() {
         {NAV_LINKS.map((link) => (
           <Link
             key={link.href}
-            href={link.href}
-            data-active={pathname === link.href ? "true" : undefined}
+            href={link.href as any}
+            data-active={isActive(link.href) ? "true" : undefined}
           >
             {link.label}
           </Link>

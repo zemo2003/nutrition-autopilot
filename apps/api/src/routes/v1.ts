@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
+import { promisify } from "node:util";
+import { execFile as execFileCb } from "node:child_process";
 import express from "express";
 import multer from "multer";
 import { addHours, endOfMonth, parse, startOfMonth } from "date-fns";
@@ -12,6 +15,7 @@ import { runPilotBackfill } from "../lib/pilot-backfill.js";
 import { importResultSchema, verificationTaskSchema } from "@nutrition/contracts";
 
 const upload = multer({ dest: "/tmp" });
+const execFile = promisify(execFileCb);
 
 export const v1Router = express.Router();
 
@@ -28,6 +32,45 @@ function hasAnyHintedNutrients(row: ReturnType<typeof parseInstacartOrders>[numb
     const value = row.nutrientHints[x.field];
     return typeof value === "number" && Number.isFinite(value);
   });
+}
+
+function parseBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const lowered = value.trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(lowered)) return true;
+    if (["0", "false", "no", "n", "off"].includes(lowered)) return false;
+  }
+  return fallback;
+}
+
+function monthBounds(month: string): { start: Date; end: Date } {
+  const normalized = /^\\d{4}-\\d{2}$/.test(month) ? month : new Date().toISOString().slice(0, 7);
+  const monthDate = parse(`${normalized}-01`, "yyyy-MM-dd", new Date());
+  return {
+    start: startOfMonth(monthDate),
+    end: endOfMonth(monthDate)
+  };
+}
+
+async function runJsonScript(scriptRelativePath: string, args: string[]) {
+  const scriptPath = path.resolve(process.cwd(), scriptRelativePath);
+  const { stdout, stderr } = await execFile("python3", [scriptPath, ...args], {
+    cwd: process.cwd(),
+    env: process.env,
+    maxBuffer: 1024 * 1024 * 25
+  });
+
+  const output = stdout.trim();
+  if (!output) {
+    throw new Error(`Script ${scriptRelativePath} returned empty output. stderr=${stderr}`);
+  }
+
+  try {
+    return JSON.parse(output) as Record<string, unknown>;
+  } catch {
+    throw new Error(`Script ${scriptRelativePath} did not return JSON. stderr=${stderr}\\nstdout=${output}`);
+  }
 }
 
 v1Router.get("/health", (_req, res) => {
@@ -600,6 +643,7 @@ v1Router.post(
       }
 
       const mode = req.body.mode === "dry-run" ? "dry-run" : "commit";
+      const historicalMode = parseBoolean(req.body.historicalMode, false);
       const weekStartDate = typeof req.body.week_start_date === "string" ? req.body.week_start_date : undefined;
       const clientExternalRef =
         typeof req.body.client_external_ref === "string" ? req.body.client_external_ref : undefined;
@@ -692,7 +736,8 @@ v1Router.post(
         createdBy: user.email,
         mealRows: mealParsed.rows,
         lotRows,
-        sourceOrderRef: lotFile?.originalname ?? mealFile.originalname
+        sourceOrderRef: lotFile?.originalname ?? mealFile.originalname,
+        historicalMode
       });
 
       const response = {
@@ -863,9 +908,7 @@ v1Router.get("/clients/:clientId/calendar", async (req, res) => {
   const org = await getPrimaryOrganization();
   const { clientId } = req.params;
   const month = String(req.query.month || new Date().toISOString().slice(0, 7));
-  const monthDate = parse(`${month}-01`, "yyyy-MM-dd", new Date());
-  const start = startOfMonth(monthDate);
-  const end = endOfMonth(monthDate);
+  const { start, end } = monthBounds(month);
 
   const events = await prisma.mealServiceEvent.findMany({
     where: {
@@ -875,6 +918,7 @@ v1Router.get("/clients/:clientId/calendar", async (req, res) => {
     },
     include: {
       sku: true,
+      mealSchedule: true,
       finalLabelSnapshot: true
     },
     orderBy: { servedAt: "asc" }
@@ -886,6 +930,7 @@ v1Router.get("/clients/:clientId/calendar", async (req, res) => {
     events: events.map((e) => ({
       id: e.id,
       servedAt: e.servedAt,
+      mealSlot: e.mealSchedule.mealSlot,
       sku: { id: e.sku.id, code: e.sku.code, name: e.sku.name },
       finalLabelSnapshotId: e.finalLabelSnapshotId
     }))
@@ -951,7 +996,16 @@ v1Router.get("/labels/:labelId", async (req, res) => {
   if (!label) {
     return res.status(404).json({ error: "Label not found" });
   }
-  return res.json(label);
+
+  const payload = (label.renderPayload ?? {}) as Record<string, unknown>;
+  const evidenceSummary = (payload.evidenceSummary ?? null) as Record<string, unknown> | null;
+  const provisional = Boolean(payload.provisional ?? evidenceSummary?.provisional ?? false);
+
+  return res.json({
+    ...label,
+    provisional,
+    evidenceSummary
+  });
 });
 
 v1Router.get("/labels/:labelId/lineage", async (req, res) => {
@@ -963,25 +1017,261 @@ v1Router.get("/labels/:labelId/lineage", async (req, res) => {
   return res.json(tree);
 });
 
-v1Router.get("/verification/tasks", async (_req, res) => {
+v1Router.post("/agents/nutrients/historical-rebuild", async (req, res) => {
   const org = await getPrimaryOrganization();
+  const month = typeof req.body?.month === "string" ? req.body.month : new Date().toISOString().slice(0, 7);
+  const autoApply = parseBoolean(req.body?.autoApply, true);
+  const sourcePolicy = typeof req.body?.sourcePolicy === "string" ? req.body.sourcePolicy : "MAX_COVERAGE";
+  const historicalMode = parseBoolean(req.body?.historicalMode, true);
+
+  if (!/^\\d{4}-\\d{2}$/.test(month)) {
+    return res.status(400).json({ error: "month must be YYYY-MM" });
+  }
+  if (!historicalMode) {
+    return res.status(400).json({ error: "historicalMode=true is required for this endpoint" });
+  }
+
+  try {
+    const cleanup = await runJsonScript("scripts/cleanup_floor_imputation.py", [
+      "--organization-slug",
+      org.slug,
+      "--month",
+      month,
+      ...(autoApply ? [] : ["--dry-run"])
+    ]);
+
+    const enrichment = await runJsonScript("scripts/agent_nutrient_enrichment.py", [
+      "--organization-slug",
+      org.slug,
+      "--month",
+      month,
+      "--source-policy",
+      sourcePolicy,
+      "--historical-mode",
+      historicalMode ? "true" : "false",
+      ...(autoApply ? [] : ["--dry-run"])
+    ]);
+
+    return res.json({
+      status: "ok",
+      month,
+      autoApply,
+      sourcePolicy,
+      historicalMode,
+      cleanup,
+      enrichment
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "historical nutrient rebuild failed",
+      detail: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+v1Router.post("/labels/refresh-served", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const month = typeof req.body?.month === "string" ? req.body.month : new Date().toISOString().slice(0, 7);
+  const onlyFinalEvents = parseBoolean(req.body?.onlyFinalEvents, true);
+
+  if (!/^\\d{4}-\\d{2}$/.test(month)) {
+    return res.status(400).json({ error: "month must be YYYY-MM" });
+  }
+
+  try {
+    const refresh = await runJsonScript("scripts/agent_refresh_served_labels.py", [
+      "--organization-slug",
+      org.slug,
+      "--month",
+      month,
+      "--only-final-events",
+      onlyFinalEvents ? "true" : "false"
+    ]);
+    return res.json({
+      status: "ok",
+      month,
+      onlyFinalEvents,
+      refresh
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "served label refresh failed",
+      detail: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+v1Router.get("/quality/summary", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const month = typeof req.query.month === "string" ? req.query.month : new Date().toISOString().slice(0, 7);
+  if (!/^\\d{4}-\\d{2}$/.test(month)) {
+    return res.status(400).json({ error: "month must be YYYY-MM" });
+  }
+
+  const { start, end } = monthBounds(month);
+  const [nutrientDefinitionCount, events, openTasks, criticalTasks] = await Promise.all([
+    prisma.nutrientDefinition.count(),
+    prisma.mealServiceEvent.findMany({
+      where: { organizationId: org.id, servedAt: { gte: start, lte: end } },
+      select: { id: true, finalLabelSnapshotId: true }
+    }),
+    prisma.verificationTask.count({ where: { organizationId: org.id, status: "OPEN" } }),
+    prisma.verificationTask.count({
+      where: { organizationId: org.id, status: "OPEN", severity: { in: ["HIGH", "CRITICAL"] } }
+    })
+  ]);
+
+  const eventIds = events.map((event) => event.id);
+  const finalLabelIds = events
+    .map((event) => event.finalLabelSnapshotId)
+    .filter((labelId): labelId is string => Boolean(labelId));
+
+  const consumptions = eventIds.length
+    ? await prisma.lotConsumptionEvent.findMany({
+        where: { mealServiceEventId: { in: eventIds } },
+        include: {
+          inventoryLot: {
+            include: {
+              product: true
+            }
+          }
+        }
+      })
+    : [];
+
+  const productIds = [...new Set(consumptions.map((consumption) => consumption.inventoryLot.productId))];
+  const syntheticUsageCount = consumptions.filter((consumption) => {
+    const product = consumption.inventoryLot.product;
+    return product.vendor === "SYSTEM_SYNTHETIC" || (product.upc ?? "").startsWith("SYNTH-");
+  }).length;
+
+  const nutrientRows = productIds.length
+    ? await prisma.productNutrientValue.findMany({
+        where: { productId: { in: productIds } },
+        select: {
+          productId: true,
+          valuePer100g: true,
+          sourceRef: true,
+          evidenceGrade: true,
+          historicalException: true,
+          verificationStatus: true
+        }
+      })
+    : [];
+
+  const finalLabels = finalLabelIds.length
+    ? await prisma.labelSnapshot.findMany({
+        where: { id: { in: finalLabelIds } },
+        select: { id: true, renderPayload: true }
+      })
+    : [];
+
+  const nonNullByProduct = new Map<string, number>();
+  for (const row of nutrientRows) {
+    if (typeof row.valuePer100g !== "number") continue;
+    nonNullByProduct.set(row.productId, (nonNullByProduct.get(row.productId) ?? 0) + 1);
+  }
+
+  const fullCoverageProducts = productIds.filter(
+    (productId) => (nonNullByProduct.get(productId) ?? 0) >= nutrientDefinitionCount
+  ).length;
+  const inferredRows = nutrientRows.filter((row) =>
+    ["INFERRED_FROM_INGREDIENT", "INFERRED_FROM_SIMILAR_PRODUCT"].includes(row.evidenceGrade)
+  ).length;
+  const exceptionRows = nutrientRows.filter(
+    (row) => row.historicalException || row.evidenceGrade === "HISTORICAL_EXCEPTION"
+  ).length;
+  const floorRows = nutrientRows.filter((row) => row.sourceRef === "agent:trace-floor-imputation").length;
+  const verifiedRows = nutrientRows.filter((row) => row.verificationStatus === "VERIFIED").length;
+
+  let provisionalLabels = 0;
+  let completeLabelNutrientCoverage = 0;
+  for (const label of finalLabels) {
+    const payload = (label.renderPayload ?? {}) as Record<string, unknown>;
+    const perServing = (payload.perServing ?? {}) as Record<string, unknown>;
+    const keysWithNumbers = Object.values(perServing).filter((value) => typeof value === "number").length;
+    if (keysWithNumbers >= nutrientDefinitionCount) {
+      completeLabelNutrientCoverage += 1;
+    }
+    if (payload.provisional === true || (payload.evidenceSummary as any)?.provisional === true) {
+      provisionalLabels += 1;
+    }
+  }
+
+  return res.json({
+    month,
+    nutrientDefinitionCount,
+    totals: {
+      serviceEvents: events.length,
+      consumedProducts: productIds.length,
+      consumedLots: consumptions.length,
+      openVerificationTasks: openTasks,
+      criticalOrHighVerificationTasks: criticalTasks
+    },
+    coverage: {
+      productFull40CoverageCount: fullCoverageProducts,
+      productFull40CoverageRatio: productIds.length ? fullCoverageProducts / productIds.length : 0,
+      finalLabelFull40CoverageCount: completeLabelNutrientCoverage,
+      finalLabelFull40CoverageRatio: finalLabels.length ? completeLabelNutrientCoverage / finalLabels.length : 0
+    },
+    evidence: {
+      inferredRows,
+      exceptionRows,
+      verifiedRows,
+      provisionalLabels,
+      floorRows
+    },
+    syntheticUsage: {
+      lotConsumptionEvents: syntheticUsageCount
+    }
+  });
+});
+
+v1Router.get("/verification/tasks", async (req, res) => {
+  const org = await getPrimaryOrganization();
+
+  const status = typeof req.query.status === "string" ? req.query.status.toUpperCase() : undefined;
+  const severity = typeof req.query.severity === "string" ? req.query.severity.toUpperCase() : undefined;
+  const sourceType = typeof req.query.sourceType === "string" ? req.query.sourceType.toUpperCase() : undefined;
+  const historicalException = parseBoolean(req.query.historicalException, false);
+  const confidenceMinRaw = Number(req.query.confidenceMin);
+  const confidenceMin = Number.isFinite(confidenceMinRaw) ? confidenceMinRaw : null;
+
   const tasks = await prisma.verificationTask.findMany({
-    where: { organizationId: org.id },
+    where: {
+      organizationId: org.id,
+      ...(status ? { status: status as any } : {}),
+      ...(severity ? { severity: severity as any } : {})
+    },
     orderBy: [{ severity: "desc" }, { createdAt: "asc" }],
     include: { reviews: true }
   });
 
-  const parsed = tasks.map((task) =>
-    verificationTaskSchema.parse({
-      id: task.id,
-      taskType: task.taskType,
-      severity: task.severity,
-      status: task.status,
-      title: task.title,
-      description: task.description,
-      payload: task.payload
-    })
-  );
+  const parsed = tasks
+    .map((task) =>
+      verificationTaskSchema.parse({
+        id: task.id,
+        taskType: task.taskType,
+        severity: task.severity,
+        status: task.status,
+        title: task.title,
+        description: task.description,
+        payload: task.payload
+      })
+    )
+    .filter((task) => {
+      if (sourceType) {
+        const taskSourceType = typeof task.payload.sourceType === "string" ? task.payload.sourceType.toUpperCase() : "";
+        if (taskSourceType !== sourceType) return false;
+      }
+      if (historicalException && task.payload.historicalException !== true) {
+        return false;
+      }
+      if (confidenceMin === null) return true;
+      const confidence = typeof task.payload.confidence === "number" ? task.payload.confidence : null;
+      if (confidence === null) return true;
+      return confidence >= confidenceMin;
+    });
 
   return res.json({ tasks: parsed });
 });
@@ -1018,13 +1308,56 @@ v1Router.patch("/verification/tasks/:id", async (req, res) => {
   });
 
   if (status === "APPROVED") {
-    // Mark product nutrient values as verified when explicitly reviewed.
-    const productId = (task.payload as any)?.productId;
+    // Verify only nutrient rows explicitly targeted by the task payload.
+    const payload = (task.payload ?? {}) as {
+      productId?: string;
+      nutrientKeys?: string[];
+      proposedValues?: Record<string, number>;
+      evidenceRefs?: string[];
+      confidence?: number;
+      sourceType?: string;
+      historicalException?: boolean;
+    };
+
+    const productId = payload.productId;
+    const nutrientKeys = Array.isArray(payload.nutrientKeys)
+      ? payload.nutrientKeys.filter((key): key is string => typeof key === "string" && key.length > 0)
+      : [];
+    const proposedValues = payload.proposedValues ?? {};
+
     if (productId) {
-      await prisma.productNutrientValue.updateMany({
-        where: { productId },
-        data: { verificationStatus: VerificationStatus.VERIFIED, version: { increment: 1 } }
+      const definitions = await prisma.nutrientDefinition.findMany({
+        where: nutrientKeys.length ? { key: { in: nutrientKeys } } : undefined,
+        select: { id: true, key: true }
       });
+      const defsByKey = new Map(definitions.map((definition) => [definition.key, definition.id]));
+
+      if (nutrientKeys.length > 0) {
+        for (const nutrientKey of nutrientKeys) {
+          const nutrientDefinitionId = defsByKey.get(nutrientKey);
+          if (!nutrientDefinitionId) continue;
+          const proposedValue = proposedValues[nutrientKey];
+
+          await prisma.productNutrientValue.updateMany({
+            where: {
+              productId,
+              nutrientDefinitionId
+            },
+            data: {
+              ...(typeof proposedValue === "number" && Number.isFinite(proposedValue)
+                ? { valuePer100g: proposedValue }
+                : {}),
+              verificationStatus: VerificationStatus.VERIFIED,
+              version: { increment: 1 }
+            }
+          });
+        }
+      } else {
+        await prisma.productNutrientValue.updateMany({
+          where: { productId },
+          data: { verificationStatus: VerificationStatus.VERIFIED, version: { increment: 1 } }
+        });
+      }
     }
   }
 

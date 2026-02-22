@@ -29,3 +29,18 @@ services:
         sync: false
       - key: NODE_ENV
         value: production
+
+  - type: worker
+    name: nutrition-autopilot-worker
+    runtime: node
+    plan: free
+    rootDir: .
+    buildCommand: npm install --include=dev && npm run db:generate
+    startCommand: npm run -w apps/api start:worker
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        value: redis://localhost:6379
+      - key: NODE_ENV
+        value: production

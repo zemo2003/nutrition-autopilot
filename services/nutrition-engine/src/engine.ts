@@ -14,18 +14,47 @@ const majorAllergens = [
   "sesame"
 ] as const;
 
-const coreKeys: NutrientKey[] = [
+const allNutrientKeys: NutrientKey[] = [
   "kcal",
+  "protein_g",
+  "carb_g",
   "fat_g",
+  "fiber_g",
+  "sugars_g",
+  "added_sugars_g",
   "sat_fat_g",
   "trans_fat_g",
   "cholesterol_mg",
   "sodium_mg",
-  "carb_g",
-  "fiber_g",
-  "sugars_g",
-  "added_sugars_g",
-  "protein_g"
+  "vitamin_d_mcg",
+  "calcium_mg",
+  "iron_mg",
+  "potassium_mg",
+  "vitamin_a_mcg",
+  "vitamin_c_mg",
+  "vitamin_e_mg",
+  "vitamin_k_mcg",
+  "thiamin_mg",
+  "riboflavin_mg",
+  "niacin_mg",
+  "vitamin_b6_mg",
+  "folate_mcg",
+  "vitamin_b12_mcg",
+  "biotin_mcg",
+  "pantothenic_acid_mg",
+  "phosphorus_mg",
+  "iodine_mcg",
+  "magnesium_mg",
+  "zinc_mg",
+  "selenium_mcg",
+  "copper_mg",
+  "manganese_mg",
+  "chromium_mcg",
+  "molybdenum_mcg",
+  "chloride_mg",
+  "choline_mg",
+  "omega3_g",
+  "omega6_g"
 ];
 
 function addScaledNutrients(target: NutrientMap, lot: ConsumedLotInput) {
@@ -53,7 +82,7 @@ export function computeSkuLabel(input: LabelComputationInput): LabelComputationR
     perServing[key] = value / servings;
   }
 
-  for (const key of coreKeys) {
+  for (const key of allNutrientKeys) {
     if (typeof perServing[key] !== "number") {
       perServing[key] = 0;
     }
@@ -95,6 +124,14 @@ export function computeSkuLabel(input: LabelComputationInput): LabelComputationR
 
   const macroKcal = (perServing.protein_g ?? 0) * 4 + (perServing.carb_g ?? 0) * 4 + (perServing.fat_g ?? 0) * 9;
   const delta = macroKcal - roundedFda.calories;
+  const evidenceSummary = {
+    verifiedCount: input.evidenceSummary?.verifiedCount ?? 0,
+    inferredCount: input.evidenceSummary?.inferredCount ?? 0,
+    exceptionCount: input.evidenceSummary?.exceptionCount ?? 0,
+    unverifiedCount: input.evidenceSummary?.unverifiedCount ?? 0,
+    totalNutrientRows: input.evidenceSummary?.totalNutrientRows ?? 0,
+    provisional: input.evidenceSummary?.provisional ?? Boolean(input.provisional)
+  };
 
   return {
     servingWeightG: totalWeight / servings,
@@ -107,6 +144,8 @@ export function computeSkuLabel(input: LabelComputationInput): LabelComputationR
       labeledCalories: roundedFda.calories,
       delta,
       pass: Math.abs(delta) <= 20
-    }
+    },
+    provisional: Boolean(input.provisional ?? evidenceSummary.provisional),
+    evidenceSummary
   };
 }

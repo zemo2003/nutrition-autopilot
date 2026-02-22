@@ -8,7 +8,29 @@ export const nutrientValueSchema = z.object({
   valuePer100g: z.number().nonnegative().nullable(),
   sourceType: z.enum(["MANUFACTURER", "USDA", "MANUAL", "DERIVED"]),
   sourceRef: z.string().min(1),
+  confidenceScore: z.number().min(0),
+  evidenceGrade: z.enum([
+    "MANUFACTURER_LABEL",
+    "USDA_BRANDED",
+    "USDA_GENERIC",
+    "OPENFOODFACTS",
+    "INFERRED_FROM_INGREDIENT",
+    "INFERRED_FROM_SIMILAR_PRODUCT",
+    "HISTORICAL_EXCEPTION"
+  ]),
+  historicalException: z.boolean().default(false),
+  retrievedAt: z.string().datetime().nullable().optional(),
+  retrievalRunId: z.string().nullable().optional(),
   verificationStatus: z.enum(["VERIFIED", "NEEDS_REVIEW", "REJECTED"])
+});
+
+export const evidenceSummarySchema = z.object({
+  verifiedCount: z.number().int().nonnegative(),
+  inferredCount: z.number().int().nonnegative(),
+  exceptionCount: z.number().int().nonnegative(),
+  unverifiedCount: z.number().int().nonnegative().default(0),
+  totalNutrientRows: z.number().int().nonnegative().default(0),
+  provisional: z.boolean()
 });
 
 export const labelSnapshotSchema = z.object({
@@ -16,6 +38,8 @@ export const labelSnapshotSchema = z.object({
   labelType: z.enum(["SKU", "INGREDIENT", "PRODUCT", "LOT"]),
   version: z.number().int().positive(),
   renderPayload: z.record(z.any()),
+  provisional: z.boolean().default(false),
+  evidenceSummary: evidenceSummarySchema.optional(),
   createdAt: z.string(),
   createdBy: z.string(),
   frozenAt: z.string().nullable()
@@ -64,6 +88,16 @@ export const importResultSchema = z.object({
   )
 });
 
+export const verificationTaskPayloadSchema = z.object({
+  productId: z.string().optional(),
+  nutrientKeys: z.array(nutrientKeySchema).default([]),
+  proposedValues: z.record(z.number().nonnegative()).default({}),
+  evidenceRefs: z.array(z.string()).default([]),
+  confidence: z.number().min(0).max(1).optional(),
+  sourceType: z.string().optional(),
+  historicalException: z.boolean().optional()
+}).catchall(z.any());
+
 export const verificationTaskSchema = z.object({
   id: z.string(),
   taskType: z.enum(["SOURCE_RETRIEVAL", "CONSISTENCY", "LINEAGE_INTEGRITY"]),
@@ -71,7 +105,7 @@ export const verificationTaskSchema = z.object({
   status: z.enum(["OPEN", "APPROVED", "REJECTED", "RESOLVED"]),
   title: z.string(),
   description: z.string(),
-  payload: z.record(z.any())
+  payload: verificationTaskPayloadSchema.default({})
 });
 
 export type LabelSnapshotDTO = z.infer<typeof labelSnapshotSchema>;

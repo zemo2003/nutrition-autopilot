@@ -12,3 +12,4 @@ packages/db/dev.db
 packages/db/dev.db-journal
 .expo
 .tmp
+scripts/artifacts
