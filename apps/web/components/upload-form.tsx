@@ -8,7 +8,13 @@ type Props = {
   modeLabel?: string;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:4000";
+function resolveApiBase() {
+  if (process.env.NEXT_PUBLIC_API_BASE) return process.env.NEXT_PUBLIC_API_BASE;
+  if (typeof window !== "undefined") {
+    return `${window.location.protocol}//${window.location.hostname}:4000`;
+  }
+  return "http://localhost:4000";
+}
 
 export function UploadForm({ endpoint, label, modeLabel = "commit" }: Props) {
   const [status, setStatus] = useState<string>("Idle");
@@ -32,8 +38,9 @@ export function UploadForm({ endpoint, label, modeLabel = "commit" }: Props) {
         data.append("mode", mode);
 
         setStatus("Uploading...");
+        const apiBase = resolveApiBase();
 
-        const response = await fetch(`${API_BASE}${endpoint}`, {
+        const response = await fetch(`${apiBase}${endpoint}`, {
           method: "POST",
           body: data
         });

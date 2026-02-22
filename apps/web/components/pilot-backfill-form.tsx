@@ -2,7 +2,13 @@
 
 import { useMemo, useState } from "react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:4000";
+function resolveApiBase() {
+  if (process.env.NEXT_PUBLIC_API_BASE) return process.env.NEXT_PUBLIC_API_BASE;
+  if (typeof window !== "undefined") {
+    return `${window.location.protocol}//${window.location.hostname}:4000`;
+  }
+  return "http://localhost:4000";
+}
 
 function getIsoDate(daysAgo = 0): string {
   const date = new Date();
@@ -54,7 +60,8 @@ export function PilotBackfillForm() {
         setStatus("Running pilot backfill...");
 
         try {
-          const response = await fetch(`${API_BASE}/v1/pilot/backfill-week`, {
+          const apiBase = resolveApiBase();
+          const response = await fetch(`${apiBase}/v1/pilot/backfill-week`, {
             method: "POST",
             body: data
           });
