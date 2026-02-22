@@ -1,5 +1,26 @@
-import "dotenv/config";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { config as loadEnv } from "dotenv";
 import { prisma } from "@nutrition/db";
+import { runNutrientAutofillSweep } from "./nutrient-autofill.js";
+
+function bootstrapEnv() {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(process.cwd(), ".env"),
+    path.resolve(process.cwd(), "../../.env"),
+    path.resolve(here, "../../../.env")
+  ];
+
+  for (const envPath of candidates) {
+    if (!fs.existsSync(envPath)) continue;
+    loadEnv({ path: envPath, override: false });
+    return;
+  }
+}
+
+bootstrapEnv();
 
 async function runConsistencySweep() {
   const products = await prisma.productCatalog.findMany({
@@ -13,9 +34,12 @@ async function runConsistencySweep() {
   });
 
   for (const product of products) {
-    const hasCore = product.nutrients.some((n) =>
-      ["kcal", "protein_g", "carb_g", "fat_g"].includes(n.nutrientDefinition.key)
+    const coreSet = new Set(
+      product.nutrients
+        .filter((n) => typeof n.valuePer100g === "number")
+        .map((n) => n.nutrientDefinition.key)
     );
+    const hasCore = ["kcal", "protein_g", "carb_g", "fat_g"].every((k) => coreSet.has(k));
     if (!hasCore) {
       const existing = await prisma.verificationTask.findFirst({
         where: {
@@ -49,9 +73,11 @@ async function runConsistencySweep() {
 
 async function main() {
   console.log("worker started");
+  await runNutrientAutofillSweep();
   await runConsistencySweep();
   setInterval(async () => {
     try {
+      await runNutrientAutofillSweep();
       await runConsistencySweep();
       console.log("worker sweep complete", new Date().toISOString());
     } catch (error) {

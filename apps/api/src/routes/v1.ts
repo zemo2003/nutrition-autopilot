@@ -3,16 +3,32 @@ import fs from "node:fs";
 import express from "express";
 import multer from "multer";
 import { addHours, endOfMonth, parse, startOfMonth } from "date-fns";
-import { prisma, VerificationStatus } from "@nutrition/db";
-import { parseInstacartOrders, parseSotWorkbook, mapOrderLineToIngredient } from "@nutrition/importers";
+import { prisma, NutrientSourceType, VerificationStatus } from "@nutrition/db";
+import { parseInstacartOrders, parsePilotMeals, parseSotWorkbook, mapOrderLineToIngredient } from "@nutrition/importers";
 import { getDefaultUser, getPrimaryOrganization } from "../lib/context.js";
 import { freezeLabelFromScheduleDone, buildLineageTree } from "../lib/label-freeze.js";
 import { ensureIdempotency, setIdempotencyResponse } from "../lib/idempotency.js";
+import { runPilotBackfill } from "../lib/pilot-backfill.js";
 import { importResultSchema, verificationTaskSchema } from "@nutrition/contracts";
 
 const upload = multer({ dest: "/tmp" });
 
 export const v1Router = express.Router();
+
+const coreNutrientKeyMap = [
+  { key: "kcal", field: "kcal" },
+  { key: "protein_g", field: "proteinG" },
+  { key: "carb_g", field: "carbG" },
+  { key: "fat_g", field: "fatG" },
+  { key: "sodium_mg", field: "sodiumMg" }
+] as const;
+
+function hasAnyHintedNutrients(row: ReturnType<typeof parseInstacartOrders>[number]): boolean {
+  return coreNutrientKeyMap.some((x) => {
+    const value = row.nutrientHints[x.field];
+    return typeof value === "number" && Number.isFinite(value);
+  });
+}
 
 v1Router.get("/health", (_req, res) => {
   res.json({ ok: true, service: "nutrition-autopilot-api", version: "v1" });
@@ -297,21 +313,70 @@ v1Router.post("/imports/instacart-orders", upload.single("file"), async (req, re
   const errors: { sheet: string; rowNumber: number | null; code: string; message: string }[] = [];
 
   if (mode === "commit") {
+    const ingredientKeySet = new Set(ingredients.map((x) => x.canonicalKey));
+
     await prisma.$transaction(async (tx) => {
+      const coreNutrientDefinitions = await tx.nutrientDefinition.findMany({
+        where: { key: { in: coreNutrientKeyMap.map((x) => x.key) } }
+      });
+      const nutrientDefinitionByKey = new Map(coreNutrientDefinitions.map((x) => [x.key, x]));
+
       for (let i = 0; i < rows.length; i += 1) {
         const row = rows[i]!;
-        const mapping = mapOrderLineToIngredient(
-          `${row.brand ?? ""} ${row.productName}`.trim(),
-          ingredients.map((x) => ({
-            ingredientKey: x.canonicalKey,
-            ingredientName: x.name,
-            category: x.category,
-            defaultUnit: x.defaultUnit,
-            allergenTags: x.allergenTags
-          }))
-        );
+        let resolvedIngredientKey: string | null = null;
+        let mappingConfidence = 1;
 
-        if (!mapping.ingredientKey) {
+        if (row.ingredientKeyHint) {
+          if (!ingredientKeySet.has(row.ingredientKeyHint)) {
+            const createdIngredient = await tx.ingredientCatalog.create({
+              data: {
+                organizationId: org.id,
+                canonicalKey: row.ingredientKeyHint,
+                name: row.ingredientNameHint ?? row.productName,
+                category: "UNMAPPED",
+                defaultUnit: "g",
+                allergenTags: [],
+                createdBy: "agent"
+              }
+            });
+            ingredientKeySet.add(createdIngredient.canonicalKey);
+            ingredients.push(createdIngredient);
+
+            await tx.verificationTask.create({
+              data: {
+                organizationId: org.id,
+                taskType: "SOURCE_RETRIEVAL",
+                severity: "MEDIUM",
+                status: "OPEN",
+                title: `Review auto-created ingredient: ${createdIngredient.name}`,
+                description: "Created from inventory hint key; requires taxonomy/allergen validation.",
+                payload: {
+                  ingredientId: createdIngredient.id,
+                  canonicalKey: createdIngredient.canonicalKey,
+                  source: "inventory_import_hint"
+                },
+                createdBy: "agent"
+              }
+            });
+          }
+
+          resolvedIngredientKey = row.ingredientKeyHint;
+        } else {
+          const mapping = mapOrderLineToIngredient(
+            `${row.brand ?? ""} ${row.productName}`.trim(),
+            ingredients.map((x) => ({
+              ingredientKey: x.canonicalKey,
+              ingredientName: x.name,
+              category: x.category,
+              defaultUnit: x.defaultUnit,
+              allergenTags: x.allergenTags
+            }))
+          );
+          resolvedIngredientKey = mapping.ingredientKey;
+          mappingConfidence = mapping.confidence;
+        }
+
+        if (!resolvedIngredientKey) {
           const task = await tx.verificationTask.create({
             data: {
               organizationId: org.id,
@@ -320,16 +385,21 @@ v1Router.post("/imports/instacart-orders", upload.single("file"), async (req, re
               status: "OPEN",
               title: `Map Instacart product: ${row.productName}`,
               description: "No deterministic ingredient match met threshold.",
-              payload: { row, confidence: mapping.confidence },
+              payload: { row, confidence: mappingConfidence, ingredientKeyHint: row.ingredientKeyHint },
               createdBy: "agent"
             }
           });
-          errors.push({ sheet: "INSTACART_ORDERS", rowNumber: i + 2, code: "LOW_CONFIDENCE_MAPPING", message: `verification_task=${task.id}` });
+          errors.push({
+            sheet: "INSTACART_ORDERS",
+            rowNumber: i + 2,
+            code: "LOW_CONFIDENCE_MAPPING",
+            message: `verification_task=${task.id}`
+          });
           continue;
         }
 
         const ingredient = await tx.ingredientCatalog.findFirstOrThrow({
-          where: { organizationId: org.id, canonicalKey: mapping.ingredientKey }
+          where: { organizationId: org.id, canonicalKey: resolvedIngredientKey }
         });
 
         const product = await tx.productCatalog.upsert({
@@ -342,7 +412,7 @@ v1Router.post("/imports/instacart-orders", upload.single("file"), async (req, re
           update: {
             name: row.productName,
             brand: row.brand,
-            vendor: "Instacart",
+            vendor: "ImportedCSV",
             version: { increment: 1 }
           },
           create: {
@@ -351,21 +421,29 @@ v1Router.post("/imports/instacart-orders", upload.single("file"), async (req, re
             name: row.productName,
             brand: row.brand,
             upc: row.upc ?? `NOUPC-${ingredient.id}-${row.productName}`,
-            vendor: "Instacart",
+            vendor: "ImportedCSV",
             createdBy: user.email
           }
         });
 
         const totalGrams = row.qty * row.gramsPerUnit;
+        const unitCostCents =
+          typeof row.unitPriceUsd === "number" && Number.isFinite(row.unitPriceUsd)
+            ? Math.round(row.unitPriceUsd * 100)
+            : typeof row.lineTotalUsd === "number" && Number.isFinite(row.lineTotalUsd) && row.qty > 0
+              ? Math.round((row.lineTotalUsd / row.qty) * 100)
+              : null;
+
         const lot = await tx.inventoryLot.create({
           data: {
             organizationId: org.id,
             productId: product.id,
-            lotCode: null,
+            lotCode: row.lotCode,
             receivedAt: row.orderedAt,
-            expiresAt: addHours(row.orderedAt, 24 * 10),
+            expiresAt: row.expiresAt ?? addHours(row.orderedAt, 24 * 10),
             quantityReceivedG: totalGrams,
             quantityAvailableG: totalGrams,
+            unitCostCents,
             sourceOrderRef: uploadedFile.originalname,
             createdBy: user.email
           }
@@ -381,24 +459,78 @@ v1Router.post("/imports/instacart-orders", upload.single("file"), async (req, re
           }
         });
 
-        const nutrientCount = await tx.productNutrientValue.count({ where: { productId: product.id } });
-        if (!nutrientCount) {
-          await tx.verificationTask.create({
-            data: {
+        if (hasAnyHintedNutrients(row)) {
+          for (const nutrient of coreNutrientKeyMap) {
+            const value = row.nutrientHints[nutrient.field];
+            if (typeof value !== "number" || !Number.isFinite(value)) continue;
+            const def = nutrientDefinitionByKey.get(nutrient.key);
+            if (!def) continue;
+
+            await tx.productNutrientValue.upsert({
+              where: {
+                productId_nutrientDefinitionId: {
+                  productId: product.id,
+                  nutrientDefinitionId: def.id
+                }
+              },
+              update: {
+                valuePer100g: value,
+                sourceType: row.nutrientSourceTypeHint ?? NutrientSourceType.MANUAL,
+                sourceRef: row.nutrientSourceRefHint ?? `${uploadedFile.originalname}:row:${i + 2}`,
+                verificationStatus: VerificationStatus.NEEDS_REVIEW,
+                version: { increment: 1 }
+              },
+              create: {
+                productId: product.id,
+                nutrientDefinitionId: def.id,
+                valuePer100g: value,
+                sourceType: row.nutrientSourceTypeHint ?? NutrientSourceType.MANUAL,
+                sourceRef: row.nutrientSourceRefHint ?? `${uploadedFile.originalname}:row:${i + 2}`,
+                verificationStatus: VerificationStatus.NEEDS_REVIEW,
+                createdBy: "agent"
+              }
+            });
+            updatedCount += 1;
+          }
+        }
+
+        const coreNutrientCount = await tx.productNutrientValue.count({
+          where: {
+            productId: product.id,
+            valuePer100g: { not: null },
+            nutrientDefinition: { key: { in: ["kcal", "protein_g", "carb_g", "fat_g"] } }
+          }
+        });
+        if (coreNutrientCount < 4) {
+          const existingMissingTask = await tx.verificationTask.findFirst({
+            where: {
               organizationId: org.id,
               taskType: "SOURCE_RETRIEVAL",
-              severity: "CRITICAL",
               status: "OPEN",
-              title: `Missing nutrient profile: ${product.name}`,
-              description: "Product has no nutrient rows. Human verification required before high-confidence labels.",
-              payload: { productId: product.id, productName: product.name },
-              createdBy: "agent"
+              payload: {
+                path: ["productId"],
+                equals: product.id
+              }
             }
           });
+          if (!existingMissingTask) {
+            await tx.verificationTask.create({
+              data: {
+                organizationId: org.id,
+                taskType: "SOURCE_RETRIEVAL",
+                severity: "CRITICAL",
+                status: "OPEN",
+                title: `Missing nutrient profile: ${product.name}`,
+                description: "Product has no complete core macro nutrient rows. Human verification required.",
+                payload: { productId: product.id, productName: product.name, source: "import" },
+                createdBy: "agent"
+              }
+            });
+          }
         }
 
         createdCount += 2;
-        if (mapping.confidence < 0.95) {
+        if (mappingConfidence < 0.95 || !!row.ingredientKeyHint) {
           updatedCount += 1;
         }
       }
@@ -448,6 +580,137 @@ v1Router.post("/imports/instacart-orders", upload.single("file"), async (req, re
   await setIdempotencyResponse(idempotencyKey, response);
   return res.json(response);
 });
+
+v1Router.post(
+  "/pilot/backfill-week",
+  upload.fields([
+    { name: "meal_file", maxCount: 1 },
+    { name: "lot_file", maxCount: 1 }
+  ]),
+  async (req, res) => {
+    try {
+      const org = await getPrimaryOrganization();
+      const user = await getDefaultUser();
+      const files = req.files as Record<string, Express.Multer.File[]> | undefined;
+      const mealFile = files?.meal_file?.[0];
+      const lotFile = files?.lot_file?.[0];
+
+      if (!mealFile) {
+        return res.status(400).json({ error: "meal_file is required" });
+      }
+
+      const mode = req.body.mode === "dry-run" ? "dry-run" : "commit";
+      const weekStartDate = typeof req.body.week_start_date === "string" ? req.body.week_start_date : undefined;
+      const clientExternalRef =
+        typeof req.body.client_external_ref === "string" ? req.body.client_external_ref : undefined;
+      const clientName = typeof req.body.client_name === "string" ? req.body.client_name : undefined;
+
+      const mealParsed = parsePilotMeals(mealFile.path, {
+        weekStartDate,
+        defaultClientExternalRef: clientExternalRef,
+        defaultClientName: clientName
+      });
+
+      const purchaseDate = typeof req.body.purchase_date === "string" ? req.body.purchase_date : undefined;
+      const lotSheetName = typeof req.body.lot_sheet_name === "string" ? req.body.lot_sheet_name : undefined;
+      const fallbackOrderedAt = parseDateOnlyUtc(
+        purchaseDate ?? mealParsed.rows[0]?.serviceDate.toISOString().slice(0, 10) ?? new Date().toISOString().slice(0, 10)
+      );
+
+      let lotRows = lotFile
+        ? parseInstacartOrders(lotFile.path, {
+            sheetName: lotSheetName,
+            defaultOrderedAt: fallbackOrderedAt
+          })
+        : [];
+
+      if (lotFile && lotRows.length === 0 && !lotSheetName) {
+        lotRows = parseInstacartOrders(lotFile.path, {
+          sheetName: "Walmart_Receipt",
+          defaultOrderedAt: fallbackOrderedAt
+        });
+      }
+
+      const parseErrors = mealParsed.errors;
+      if (parseErrors.length > 0) {
+        return res.status(400).json({
+          error: "Meal import parse validation failed",
+          errorCount: parseErrors.length,
+          errors: parseErrors
+        });
+      }
+      if (mealParsed.rows.length === 0) {
+        return res.status(400).json({ error: "No meal rows found in meal_file" });
+      }
+
+      const payloadChecksum = crypto
+        .createHash("sha256")
+        .update(fs.readFileSync(mealFile.path))
+        .update(lotFile ? fs.readFileSync(lotFile.path) : "")
+        .update(weekStartDate ?? "")
+        .update(clientExternalRef ?? "")
+        .digest("hex");
+      const idempotencyKey = `PILOT_BACKFILL:${org.id}:${payloadChecksum}:${mode}`;
+      const idempotency = await ensureIdempotency("PILOT_BACKFILL", idempotencyKey, {
+        mode,
+        weekStartDate,
+        clientExternalRef,
+        clientName,
+        mealRows: mealParsed.rows.length,
+        lotRows: lotRows.length,
+        mealFileName: mealFile.originalname,
+        lotFileName: lotFile?.originalname ?? null
+      });
+
+      if (idempotency.replay && idempotency.existing.responseBody) {
+        return res.json({ replay: true, ...(idempotency.existing.responseBody as object) });
+      }
+
+      if (mode === "dry-run") {
+        const mealDays = new Set(mealParsed.rows.map((row) => row.serviceDate.toISOString().slice(0, 10)));
+        const skuCodes = new Set(mealParsed.rows.map((row) => row.skuCode));
+        const ingredientKeys = new Set(mealParsed.rows.map((row) => row.ingredientKey));
+        const dryRunResponse = {
+          mode,
+          status: "SUCCEEDED",
+          counts: {
+            mealRows: mealParsed.rows.length,
+            lotRows: lotRows.length,
+            serviceDays: mealDays.size,
+            skus: skuCodes.size,
+            ingredients: ingredientKeys.size
+          },
+          warnings: lotRows.length === 0 ? ["No lot rows parsed; synthetic lots would be created on commit."] : []
+        };
+        await setIdempotencyResponse(idempotencyKey, dryRunResponse);
+        return res.json(dryRunResponse);
+      }
+
+      const run = await runPilotBackfill({
+        organizationId: org.id,
+        servedByUserId: user.id,
+        createdBy: user.email,
+        mealRows: mealParsed.rows,
+        lotRows,
+        sourceOrderRef: lotFile?.originalname ?? mealFile.originalname
+      });
+
+      const response = {
+        mode,
+        status: run.freezeErrors.length ? "PARTIAL" : "SUCCEEDED",
+        ...run
+      };
+      await setIdempotencyResponse(idempotencyKey, response);
+      return res.json(response);
+    } catch (error) {
+      console.error("pilot backfill failed", error);
+      return res.status(500).json({
+        error: "Pilot backfill failed",
+        detail: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  }
+);
 
 v1Router.post("/instacart/drafts/generate", async (_req, res) => {
   const org = await getPrimaryOrganization();
@@ -543,6 +806,17 @@ v1Router.post("/instacart/drafts/generate", async (_req, res) => {
 
   return res.json({ id: draft.id, ...payload });
 });
+
+function parseDateOnlyUtc(input: string): Date {
+  const normalized = input.trim().slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalized);
+  if (!match) return new Date();
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return new Date();
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
+}
 
 v1Router.patch("/schedule/:id/status", async (req, res) => {
   const user = await getDefaultUser();

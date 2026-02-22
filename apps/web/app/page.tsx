@@ -34,7 +34,7 @@ export default async function HomePage() {
       <p>Blank-slate operations console with immutable nutrition label lineage.</p>
 
       <div className="row">
-        <Link href="/upload">Upload Center</Link>
+        <Link href="/upload">Upload + Pilot Backfill</Link>
         <Link href={`/clients/${primaryClientId}/calendar`}>Calendar Drill-down</Link>
       </div>
 

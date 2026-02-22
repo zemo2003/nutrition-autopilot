@@ -23,7 +23,8 @@
     "db:generate": "npm run -w packages/db db:generate",
     "db:migrate": "npm run -w packages/db db:migrate",
     "db:seed": "npm run -w packages/db db:seed",
-    "sot:template": "npm run -w packages/importers sot:template"
+    "sot:template": "npm run -w packages/importers sot:template",
+    "pilot:backfill": "./scripts/pilot-backfill.sh"
   },
   "devDependencies": {
     "@types/node": "22.13.10",

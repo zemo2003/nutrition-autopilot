@@ -47,6 +47,7 @@ Writes `/Users/daniel/Desktop/Nutrition_Autopilot_SOT.xlsx`.
 
 - `POST /v1/imports/sot` (`multipart/form-data`: `file`, `mode=dry-run|commit`)
 - `POST /v1/imports/instacart-orders` (`multipart/form-data`: `file`, `mode=dry-run|commit`)
+- `POST /v1/pilot/backfill-week` (`multipart/form-data`: `meal_file`, optional `lot_file`, optional `week_start_date`, `purchase_date`, `client_external_ref`, `client_name`, `mode`)
 - `POST /v1/instacart/drafts/generate`
 - `PATCH /v1/schedule/:id/status`
 - `GET /v1/clients/:clientId/calendar?month=YYYY-MM`
@@ -64,6 +65,32 @@ Writes `/Users/daniel/Desktop/Nutrition_Autopilot_SOT.xlsx`.
 2. Labels are frozen at serve time from consumed lots.
 3. Label lineage graph is immutable and drill-down capable.
 4. Agent writes are proposal-only; human approval required before mutation.
+
+## Fastest Web-First Pilot Path
+
+1. Start API + web:
+
+```bash
+npm run dev:api
+npm run dev:web
+```
+
+2. Open web upload center:
+
+`http://localhost:3000/upload`
+
+3. Run `Pilot Backfill (Historical Week)` with:
+
+- `meal_file`: `/Users/daniel/Downloads/Alex_Week_Workbook_FullDetail.xlsx`
+- `lot_file`: `/Users/daniel/Downloads/Walmart_Receipt_Complete_With_Item_Name.xlsx` (or detailed lot CSV)
+- `week_start_date`: `2026-02-16`
+- `mode`: `commit`
+
+4. Open served calendar and printable labels:
+
+- `http://localhost:3000/clients/<clientId>/calendar?month=2026-02`
+- label detail: `/labels/<labelId>`
+- print view: `/labels/<labelId>/print`
 
 ## GitHub + DB + TestFlight
 
