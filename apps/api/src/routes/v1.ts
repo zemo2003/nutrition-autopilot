@@ -45,7 +45,7 @@ function parseBoolean(value: unknown, fallback: boolean): boolean {
 }
 
 function monthBounds(month: string): { start: Date; end: Date } {
-  const normalized = /^\\d{4}-\\d{2}$/.test(month) ? month : new Date().toISOString().slice(0, 7);
+  const normalized = /^\d{4}-\d{2}$/.test(month) ? month : new Date().toISOString().slice(0, 7);
   const monthDate = parse(`${normalized}-01`, "yyyy-MM-dd", new Date());
   return {
     start: startOfMonth(monthDate),
@@ -1024,7 +1024,7 @@ v1Router.post("/agents/nutrients/historical-rebuild", async (req, res) => {
   const sourcePolicy = typeof req.body?.sourcePolicy === "string" ? req.body.sourcePolicy : "MAX_COVERAGE";
   const historicalMode = parseBoolean(req.body?.historicalMode, true);
 
-  if (!/^\\d{4}-\\d{2}$/.test(month)) {
+  if (!/^\d{4}-\d{2}$/.test(month)) {
     return res.status(400).json({ error: "month must be YYYY-MM" });
   }
   if (!historicalMode) {
@@ -1074,7 +1074,7 @@ v1Router.post("/labels/refresh-served", async (req, res) => {
   const month = typeof req.body?.month === "string" ? req.body.month : new Date().toISOString().slice(0, 7);
   const onlyFinalEvents = parseBoolean(req.body?.onlyFinalEvents, true);
 
-  if (!/^\\d{4}-\\d{2}$/.test(month)) {
+  if (!/^\d{4}-\d{2}$/.test(month)) {
     return res.status(400).json({ error: "month must be YYYY-MM" });
   }
 
@@ -1104,7 +1104,7 @@ v1Router.post("/labels/refresh-served", async (req, res) => {
 v1Router.get("/quality/summary", async (req, res) => {
   const org = await getPrimaryOrganization();
   const month = typeof req.query.month === "string" ? req.query.month : new Date().toISOString().slice(0, 7);
-  if (!/^\\d{4}-\\d{2}$/.test(month)) {
+  if (!/^\d{4}-\d{2}$/.test(month)) {
     return res.status(400).json({ error: "month must be YYYY-MM" });
   }
 
