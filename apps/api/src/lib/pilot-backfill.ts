@@ -263,14 +263,26 @@ export async function runPilotBackfill(input: RunPilotBackfillInput): Promise<Ru
       });
       if (!existingRecipe) created.recipes += 1;
 
-      await tx.recipeLine.deleteMany({ where: { recipeId } });
       const sortedLines = [...rows].sort((a, b) => a.lineOrder - b.lineOrder);
       let safeLineOrder = 1;
       for (const line of sortedLines) {
         const ingredient = ingredientByKey.get(line.ingredientKey);
         if (!ingredient) continue;
-        await tx.recipeLine.create({
-          data: {
+        await tx.recipeLine.upsert({
+          where: {
+            recipeId_lineOrder: {
+              recipeId,
+              lineOrder: safeLineOrder
+            }
+          },
+          update: {
+            ingredientId: ingredient.id,
+            targetGPerServing: line.gramsPerServing,
+            preparation: line.preparation ?? undefined,
+            required: line.required,
+            version: { increment: 1 }
+          },
+          create: {
             recipeId,
             ingredientId: ingredient.id,
             lineOrder: safeLineOrder,
@@ -281,6 +293,41 @@ export async function runPilotBackfill(input: RunPilotBackfillInput): Promise<Ru
           }
         });
         safeLineOrder += 1;
+      }
+
+      const staleLines = await tx.recipeLine.findMany({
+        where: { recipeId, lineOrder: { gte: safeLineOrder } },
+        select: { id: true }
+      });
+
+      if (staleLines.length > 0) {
+        const staleIds = staleLines.map((line) => line.id);
+        const blockedRows = await tx.lotConsumptionEvent.findMany({
+          where: { recipeLineId: { in: staleIds } },
+          select: { recipeLineId: true }
+        });
+        const blockedIds = new Set(blockedRows.map((row) => row.recipeLineId));
+        const deletableIds = staleIds.filter((id) => !blockedIds.has(id));
+
+        if (deletableIds.length > 0) {
+          await tx.recipeLine.deleteMany({ where: { id: { in: deletableIds } } });
+        }
+
+        if (blockedIds.size > 0) {
+          await ensureOpenTask(tx, {
+            organizationId: input.organizationId,
+            taskType: "LINEAGE_INTEGRITY",
+            severity: "LOW",
+            title: `Preserved historical recipe lines: ${first.recipeName}`,
+            description:
+              "Recipe lines tied to historical lot consumption were preserved during pilot backfill rerun.",
+            dedupeKey: `pilot-recipe-line-preserve:${recipeId}`,
+            payload: {
+              recipeId,
+              preservedRecipeLineIds: Array.from(blockedIds)
+            }
+          });
+        }
       }
     }
 
@@ -302,38 +349,47 @@ export async function runPilotBackfill(input: RunPilotBackfillInput): Promise<Ru
           skuId,
           serviceDate: row.serviceDate,
           mealSlot: row.mealSlot
+        },
+        include: {
+          serviceEvent: {
+            select: { id: true }
+          }
         }
       });
 
-      const schedule = existing
-        ? await tx.mealSchedule.update({
-            where: { id: existing.id },
-            data: {
-              plannedServings: row.plannedServings,
-              notes: existing.notes ?? "pilot_backfill",
-              version: { increment: 1 }
-            }
-          })
-        : await tx.mealSchedule.create({
-            data: {
-              organizationId: input.organizationId,
-              clientId: client.id,
-              skuId,
-              serviceDate: row.serviceDate,
-              mealSlot: row.mealSlot,
-              plannedServings: row.plannedServings,
-              status: "PLANNED",
-              notes: "pilot_backfill",
-              createdBy: input.createdBy
-            }
-          });
+      const schedule = existing?.serviceEvent
+        ? existing
+        : existing
+          ? await tx.mealSchedule.update({
+              where: { id: existing.id },
+              data: {
+                plannedServings: row.plannedServings,
+                notes: existing.notes ?? "pilot_backfill",
+                version: { increment: 1 }
+              }
+            })
+          : await tx.mealSchedule.create({
+              data: {
+                organizationId: input.organizationId,
+                clientId: client.id,
+                skuId,
+                serviceDate: row.serviceDate,
+                mealSlot: row.mealSlot,
+                plannedServings: row.plannedServings,
+                status: "PLANNED",
+                notes: "pilot_backfill",
+                createdBy: input.createdBy
+              }
+            });
 
       if (!existing) created.schedules += 1;
-      scheduleQueueLocal.push({
-        scheduleId: schedule.id,
-        serviceDate: schedule.serviceDate,
-        mealSlot: schedule.mealSlot
-      });
+      if (!existing?.serviceEvent) {
+        scheduleQueueLocal.push({
+          scheduleId: schedule.id,
+          serviceDate: schedule.serviceDate,
+          mealSlot: schedule.mealSlot
+        });
+      }
     }
 
     const ingredientRowsForMatching = [...ingredientByKey.values()].map((ingredient) => ({
