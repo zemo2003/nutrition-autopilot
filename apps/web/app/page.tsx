@@ -2,11 +2,43 @@ import Link from "next/link";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:4000";
 
+type SystemState = {
+  hasCommittedSot: boolean;
+  counts: {
+    activeSkus: number;
+    activeIngredients: number;
+    lotsOnHand: number;
+    schedules: number;
+    servedMeals: number;
+    labels: number;
+    openVerificationTasks: number;
+  };
+};
+
+type Client = {
+  id: string;
+  name: string;
+  externalRef?: string;
+};
+
 async function getState() {
   try {
     const response = await fetch(`${API_BASE}/v1/system/state`, { cache: "no-store" });
     if (!response.ok) return null;
-    return response.json();
+    const json = (await response.json()) as Partial<SystemState>;
+    if (!json || typeof json !== "object") return null;
+    return {
+      hasCommittedSot: Boolean(json.hasCommittedSot),
+      counts: {
+        activeSkus: Number(json.counts?.activeSkus ?? 0),
+        activeIngredients: Number(json.counts?.activeIngredients ?? 0),
+        lotsOnHand: Number(json.counts?.lotsOnHand ?? 0),
+        schedules: Number(json.counts?.schedules ?? 0),
+        servedMeals: Number(json.counts?.servedMeals ?? 0),
+        labels: Number(json.counts?.labels ?? 0),
+        openVerificationTasks: Number(json.counts?.openVerificationTasks ?? 0),
+      },
+    } satisfies SystemState;
   } catch {
     return null;
   }
@@ -16,18 +48,20 @@ async function getClients() {
   try {
     const response = await fetch(`${API_BASE}/v1/clients`, { cache: "no-store" });
     if (!response.ok) return [];
-    const json = await response.json();
-    return json.clients ?? [];
+    const json = (await response.json()) as {
+      clients?: Array<{ id?: string; fullName?: string; externalRef?: string }>;
+    };
+    return (json.clients ?? [])
+      .filter((client) => typeof client.id === "string" && typeof client.fullName === "string")
+      .map((client) => ({
+        id: client.id!,
+        name: client.fullName!,
+        externalRef: client.externalRef,
+      }));
   } catch {
     return [];
   }
 }
-
-type Client = {
-  id: string;
-  name: string;
-  externalRef?: string;
-};
 
 export default async function HomePage() {
   const [state, clients] = await Promise.all([getState(), getClients()]);
@@ -69,33 +103,33 @@ export default async function HomePage() {
             <h2 className="section-title">System Overview</h2>
             <div className="kpi-grid">
               <div className="kpi">
-                <div className="kpi-value">{state.skuCount ?? 0}</div>
+                <div className="kpi-value">{state.counts.activeSkus}</div>
                 <div className="kpi-label">Active SKUs</div>
               </div>
               <div className="kpi">
-                <div className="kpi-value">{state.ingredientCount ?? 0}</div>
+                <div className="kpi-value">{state.counts.activeIngredients}</div>
                 <div className="kpi-label">Ingredients</div>
               </div>
               <div className="kpi">
-                <div className="kpi-value">{state.lotCount ?? 0}</div>
+                <div className="kpi-value">{state.counts.lotsOnHand}</div>
                 <div className="kpi-label">Inventory Lots</div>
               </div>
               <div className="kpi">
-                <div className="kpi-value">{state.scheduleCount ?? 0}</div>
+                <div className="kpi-value">{state.counts.schedules}</div>
                 <div className="kpi-label">Schedules</div>
               </div>
               <div className="kpi">
-                <div className="kpi-value">{state.servedMealCount ?? 0}</div>
+                <div className="kpi-value">{state.counts.servedMeals}</div>
                 <div className="kpi-label">Served Meals</div>
               </div>
               <div className="kpi">
-                <div className="kpi-value">{state.labelCount ?? 0}</div>
+                <div className="kpi-value">{state.counts.labels}</div>
                 <div className="kpi-label">Frozen Labels</div>
               </div>
               <div className="kpi">
-                <div className="kpi-value">{state.openVerificationCount ?? 0}</div>
+                <div className="kpi-value">{state.counts.openVerificationTasks}</div>
                 <div className="kpi-label">Open Verifications</div>
-                {(state.openVerificationCount ?? 0) > 0 && (
+                {state.counts.openVerificationTasks > 0 && (
                   <div className="kpi-note">
                     <span className="badge badge-warn">Needs Attention</span>
                   </div>
