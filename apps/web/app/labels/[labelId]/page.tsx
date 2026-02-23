@@ -72,6 +72,7 @@ type LineageNode = {
   children?: LineageNode[];
 };
 
+// Macros only — micronutrients hidden until data quality is tightened
 const nutrientOrder = [
   "kcal",
   "protein_g",
@@ -84,35 +85,6 @@ const nutrientOrder = [
   "trans_fat_g",
   "cholesterol_mg",
   "sodium_mg",
-  "vitamin_d_mcg",
-  "calcium_mg",
-  "iron_mg",
-  "potassium_mg",
-  "vitamin_a_mcg",
-  "vitamin_c_mg",
-  "vitamin_e_mg",
-  "vitamin_k_mcg",
-  "thiamin_mg",
-  "riboflavin_mg",
-  "niacin_mg",
-  "vitamin_b6_mg",
-  "folate_mcg",
-  "vitamin_b12_mcg",
-  "biotin_mcg",
-  "pantothenic_acid_mg",
-  "phosphorus_mg",
-  "iodine_mcg",
-  "magnesium_mg",
-  "zinc_mg",
-  "selenium_mcg",
-  "copper_mg",
-  "manganese_mg",
-  "chromium_mcg",
-  "molybdenum_mcg",
-  "chloride_mg",
-  "choline_mg",
-  "omega3_g",
-  "omega6_g",
 ] as const;
 
 function resolveNutrientDataset(payload: LabelPayload):
@@ -150,14 +122,10 @@ function formatNutrientValue(value: number): string {
 }
 
 function orderedNutrients(values: Record<string, number>): Array<{ key: string; value: number }> {
-  const ordered = nutrientOrder
+  // Only show nutrients explicitly listed in nutrientOrder (macros)
+  return nutrientOrder
     .filter((key) => typeof values[key] === "number" && Number.isFinite(values[key]!))
     .map((key) => ({ key, value: values[key]! }));
-  const extras = Object.entries(values)
-    .filter(([key, value]) => !nutrientOrder.includes(key as any) && typeof value === "number" && Number.isFinite(value))
-    .map(([key, value]) => ({ key, value: value as number }))
-    .sort((a, b) => a.key.localeCompare(b.key));
-  return [...ordered, ...extras];
 }
 
 async function getLabel(labelId: string) {
@@ -351,22 +319,6 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
                     <span className="val">{dv.protein_g != null ? `${Math.round(dv.protein_g)}%` : ""}</span>
                   </div>
                   <div style={{ borderTop: "8px solid currentColor", margin: "0 var(--sp-3)" }}></div>
-                  <div className="nutrition-row" style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span>Vitamin D {r.vitaminDMcg ?? (payload.perServing?.vitamin_d_mcg ?? 0).toFixed(1)}mcg</span>
-                    <span className="val">{dv.vitamin_d_mcg != null ? `${Math.round(dv.vitamin_d_mcg)}%` : ""}</span>
-                  </div>
-                  <div className="nutrition-row" style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span>Calcium {r.calciumMg ?? Math.round(payload.perServing?.calcium_mg ?? 0)}mg</span>
-                    <span className="val">{dv.calcium_mg != null ? `${Math.round(dv.calcium_mg)}%` : ""}</span>
-                  </div>
-                  <div className="nutrition-row" style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span>Iron {r.ironMg ?? (payload.perServing?.iron_mg ?? 0).toFixed(1)}mg</span>
-                    <span className="val">{dv.iron_mg != null ? `${Math.round(dv.iron_mg)}%` : ""}</span>
-                  </div>
-                  <div className="nutrition-row" style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span>Potassium {r.potassiumMg ?? Math.round(payload.perServing?.potassium_mg ?? 0)}mg</span>
-                    <span className="val">{dv.potassium_mg != null ? `${Math.round(dv.potassium_mg)}%` : ""}</span>
-                  </div>
                   <div style={{ padding: "var(--sp-2) var(--sp-3)", fontSize: 10, lineHeight: 1.4, opacity: 0.55, borderTop: "1px solid var(--c-border-light)" }}>
                     * The % Daily Value (DV) tells you how much a nutrient in a serving of food contributes to a daily diet. 2,000 calories a day is used for general nutrition advice.
                   </div>
