@@ -83,13 +83,24 @@ function validateCalorieConsistency(
   const protein = nutrients.protein_g;
   const carb = nutrients.carb_g;
   const fat = nutrients.fat_g;
+  const fiber = nutrients.fiber_g ?? 0;
 
   if (kcal === undefined || protein === undefined || carb === undefined || fat === undefined) {
     return null;
   }
 
+  // Standard Atwater factors: P×4 + C×4 + F×9
   const calculatedKcal = protein * 4 + carb * 4 + fat * 9;
-  const tolerance = calculatedKcal * 0.15; // 15% tolerance
+
+  // High-fiber/high-water foods (vegetables, fruits) legitimately diverge from Atwater
+  // because USDA uses bomb calorimetry which accounts for indigestible fiber.
+  // Fiber contributes ~4 kcal/g to Atwater but only ~2 kcal/g metabolizable energy.
+  // Use wider tolerance when fiber is a large fraction of total carbs.
+  const fiberRatio = carb > 0 ? fiber / carb : 0;
+  const isLowCalFood = kcal < 60; // vegetables, leafy greens
+  const tolerancePct = (fiberRatio > 0.3 || isLowCalFood) ? 0.35 : 0.15;
+
+  const tolerance = Math.max(calculatedKcal * tolerancePct, 10); // minimum 10 kcal absolute tolerance
   const difference = Math.abs(kcal - calculatedKcal);
 
   if (difference > tolerance) {
@@ -98,7 +109,7 @@ function validateCalorieConsistency(
       value: kcal,
       rule: "Calorie Consistency Check",
       severity: "WARNING",
-      message: `Reported kcal (${kcal}) differs significantly from macronutrient calculation (${calculatedKcal.toFixed(1)}). Difference: ${difference.toFixed(1)} kcal (threshold: ${tolerance.toFixed(1)})`,
+      message: `Reported kcal (${kcal}) differs from Atwater calculation (${calculatedKcal.toFixed(1)}). Difference: ${difference.toFixed(1)} kcal (threshold: ${tolerance.toFixed(1)})`,
     };
   }
 

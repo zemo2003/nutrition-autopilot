@@ -175,15 +175,22 @@ export function computeSkuLabel(input: LabelComputationInput): LabelComputationR
         .join(", ")}`
     : "Contains: None of the 9 major allergens";
 
-  // BUG FIX 2: Calculate macroKcal from unrounded values vs compare to unrounded calories
-  // This detects data entry errors, not rounding artifacts
+  // Energy invariant: derive kcal from macros (Atwater factors) and compare to reported kcal
   const macroKcal = (perServing.protein_g ?? 0) * 4 + (perServing.carb_g ?? 0) * 4 + (perServing.fat_g ?? 0) * 9;
   const rawCalories = perServing.kcal ?? 0;
   const delta = macroKcal - rawCalories;
 
-  // BUG FIX 1: Use FDA Class I tolerance of ±20% (percentage-based)
+  // FDA Class I tolerance: ±20%.
+  // For low-calorie high-fiber foods (vegetables), USDA-measured kcal legitimately diverges
+  // from Atwater calculation because fiber contributes ~2 kcal/g not 4 kcal/g.
+  // Use wider tolerance (35%) for foods under 60 kcal/serving or with high fiber ratio.
+  const fiberG = perServing.fiber_g ?? 0;
+  const carbG = perServing.carb_g ?? 0;
+  const fiberRatio = carbG > 0 ? fiberG / carbG : 0;
+  const isLowCalHighFiber = rawCalories < 60 || fiberRatio > 0.3;
+  const tolerancePct = isLowCalHighFiber ? 0.35 : 0.20;
   const percentError = rawCalories > 0 ? Math.abs(delta / rawCalories) : (macroKcal > 0 ? 1 : 0);
-  const pass = percentError <= 0.20; // FDA Class I: ±20%
+  const pass = percentError <= tolerancePct;
 
   // BUG FIX 3: Calculate %DV for all nutrients that have FDA daily values
   const percentDV: Partial<Record<NutrientKey, number>> = {};

@@ -85,7 +85,12 @@ async function fetchOpenFoodFactsByUpc(upc: string): Promise<AutofillResult | nu
     if (!json || json.status !== 1 || !json.product) return null;
 
     const nutriments = json.product.nutriments ?? {};
-    const kcal = toNumber(nutriments["energy-kcal_100g"]) ?? (toNumber(nutriments["energy-kj_100g"]) ?? 0) / 4.184;
+    // BUG FIX: old code was `toNumber(kcal_100g) ?? (toNumber(kj_100g) ?? 0) / 4.184`
+    // which evaluated to `0 / 4.184 = 0` when kcal was null and kj was also null,
+    // but more critically: when kcal_100g was 0 (falsy), it would fall through to kJ branch
+    const kcalDirect = toNumber(nutriments["energy-kcal_100g"]);
+    const kjDirect = toNumber(nutriments["energy-kj_100g"]);
+    const kcal = kcalDirect !== null ? kcalDirect : (kjDirect !== null ? kjDirect / 4.184 : null);
     const protein = toNumber(nutriments["proteins_100g"]);
     const carb = toNumber(nutriments["carbohydrates_100g"]);
     const fat = toNumber(nutriments["fat_100g"]);

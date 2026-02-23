@@ -502,8 +502,22 @@ export async function freezeLabelFromScheduleDone(input: {
       }
     });
 
-    // Plausibility gate: validate the computed per-serving nutrients
-    const plausibilityIssues = validateFoodProduct(label.perServing, schedule.sku.name);
+    // Plausibility gate: validate using per-100g normalization (thresholds are per-100g)
+    // BUG FIX: was passing per-serving values to per-100g thresholds — a 250g serving
+    // of chicken would show 56g protein/serving and incorrectly flag as implausible
+    const per100gForValidation: NutrientMap = {} as NutrientMap;
+    if (label.servingWeightG > 0) {
+      for (const key of nutrientKeys) {
+        const val = label.perServing[key];
+        if (typeof val === "number") {
+          per100gForValidation[key] = (val / label.servingWeightG) * 100;
+        }
+      }
+    }
+    const plausibilityIssues = validateFoodProduct(
+      label.servingWeightG > 0 ? per100gForValidation : label.perServing,
+      schedule.sku.name
+    );
 
     const plausibilityErrors = plausibilityIssues.filter(
       (i: PlausibilityIssue) => i.severity === "ERROR"
