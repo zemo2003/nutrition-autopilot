@@ -176,20 +176,25 @@ function fallbackByName(productName: string): { key: string; nutrients: FullNutr
   if (n.includes("flax seed") || n.includes("flaxseed")) return lookup("ING-FLAX-SEEDS");
   if (n.includes("black bean"))       return lookup("ING-BLACK-BEANS-COOKED");
   if (n.includes("kidney bean"))      return lookup("ING-KIDNEY-BEANS-COOKED");
-  if (n.includes("ground turkey"))    return lookup("ING-GROUND-TURKEY-93-COOKED");
-  if (n.includes("ground beef"))      return lookup("ING-GROUND-BEEF-95-RAW");
-  if (n.includes("chicken thigh"))    return lookup("ING-CHICKEN-THIGH-RAW");
-  if (n.includes("chicken breast") && n.includes("cooked")) return lookup("ING-CHICKEN-BREAST-COOKED");
-  if (n.includes("chicken breast"))   return lookup("ING-CHICKEN-BREAST-RAW");
+  // AUDIT FIX (Priority 4): Standardize all meats to COOKED state.
+  // Recipes typically specify finished/cooked weights. Using RAW profiles for
+  // cooked ingredients causes 10-37% calorie underreporting.
+  // If name explicitly says "raw", use RAW profile; otherwise default to COOKED.
+  if (n.includes("ground turkey"))    return lookup("ING-GROUND-TURKEY-93-COOKED");    // COOKED: 182 kcal/100g
+  if (n.includes("ground beef"))      return lookup("ING-LEAN-GROUND-BEEF-95-COOKED"); // COOKED: 173 kcal/100g (was RAW: 137)
+  if (n.includes("chicken thigh") && n.includes("raw")) return lookup("ING-CHICKEN-THIGH-RAW");
+  if (n.includes("chicken thigh"))    return lookup("ING-CHICKEN-THIGH-RAW");           // RAW: no cooked entry yet — TODO: add cooked thigh
+  if (n.includes("chicken breast") && n.includes("raw")) return lookup("ING-CHICKEN-BREAST-RAW");
+  if (n.includes("chicken breast"))   return lookup("ING-CHICKEN-BREAST-COOKED");       // COOKED: 165 kcal/100g (was RAW unless "cooked" in name)
 
-  // Single-word matches
+  // Single-word matches — default to COOKED state for meats
   if (n.includes("egg"))              return lookup("ING-EGGS-WHOLE");
-  if (n.includes("chicken"))          return lookup("ING-CHICKEN-BREAST-RAW");
-  if (n.includes("turkey"))           return lookup("ING-GROUND-TURKEY-93-COOKED");
-  if (n.includes("beef"))             return lookup("ING-GROUND-BEEF-95-RAW");
-  if (n.includes("salmon"))           return lookup("ING-SALMON-ATLANTIC-RAW");
-  if (n.includes("cod") || n.includes("fish")) return lookup("ING-COD-COOKED");
-  if (n.includes("tuna"))             return lookup("ING-TUNA-DRAINED");
+  if (n.includes("chicken"))          return lookup("ING-CHICKEN-BREAST-COOKED");       // COOKED (was RAW)
+  if (n.includes("turkey"))           return lookup("ING-GROUND-TURKEY-93-COOKED");     // COOKED
+  if (n.includes("beef"))             return lookup("ING-LEAN-GROUND-BEEF-95-COOKED");  // COOKED (was RAW)
+  if (n.includes("salmon"))           return lookup("ING-SALMON-ATLANTIC-RAW");         // RAW: no cooked entry yet — TODO: add cooked salmon
+  if (n.includes("cod") || n.includes("fish")) return lookup("ING-COD-COOKED");        // COOKED
+  if (n.includes("tuna"))             return lookup("ING-TUNA-DRAINED");                // DRAINED/COOKED
   if (n.includes("shrimp"))           return lookup("ING-SHRIMP-COOKED");
   if (n.includes("tofu"))             return lookup("ING-TOFU-FIRM");
   if (n.includes("milk"))             return lookup("ING-MILK");
@@ -290,9 +295,39 @@ async function upsertNutrientsForProduct(input: {
   });
   const defByKey = new Map(defs.map((d) => [d.key, d]));
 
+  // AUDIT FIX (Priority 5): Runtime sanity validation before DB write.
+  // Prevents silent data corruption from bad source data or unit mismatches.
+  const SANITY_LIMITS: Partial<Record<NutrientKey, { min: number; max: number }>> = {
+    kcal: { min: 0, max: 900 },           // No food exceeds ~900 kcal/100g (pure fat = 884)
+    protein_g: { min: 0, max: 100 },       // Pure protein isolate ≈ 90g/100g
+    fat_g: { min: 0, max: 100 },           // Pure fat/oil = 100g/100g
+    carb_g: { min: 0, max: 100 },          // Pure sugar = 100g/100g
+    fiber_g: { min: 0, max: 80 },          // Psyllium husk ≈ 71g/100g
+    sugars_g: { min: 0, max: 100 },
+    added_sugars_g: { min: 0, max: 100 },
+    sat_fat_g: { min: 0, max: 100 },
+    trans_fat_g: { min: 0, max: 100 },
+    cholesterol_mg: { min: 0, max: 3100 }, // Dried egg yolk ≈ 2307mg/100g
+    sodium_mg: { min: 0, max: 40000 },     // Table salt = 38758mg/100g
+  };
+
   for (const key of keysToUpsert) {
     const value = input.values[key];
     if (typeof value !== "number" || !Number.isFinite(value)) continue;
+
+    // Reject negative values for any nutrient
+    if (value < 0) {
+      console.warn(`[nutrient-autofill] Rejecting negative value for ${key}: ${value} (product: ${input.productId})`);
+      continue;
+    }
+
+    // Check sanity limits for nutrients with known bounds
+    const limit = SANITY_LIMITS[key];
+    if (limit && (value < limit.min || value > limit.max)) {
+      console.warn(`[nutrient-autofill] Rejecting out-of-range value for ${key}: ${value} (limit: ${limit.min}-${limit.max}, product: ${input.productId})`);
+      continue;
+    }
+
     const def = defByKey.get(key);
     if (!def) continue;
 

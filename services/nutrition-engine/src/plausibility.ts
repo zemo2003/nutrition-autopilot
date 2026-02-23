@@ -357,8 +357,8 @@ function validateCategoryRules(
       checkRange("sugars_g", 0, 2);
       // added_sugars_g: 0-2g
       checkRange("added_sugars_g", 0, 2);
-      // protein_g: 15-35g
-      checkRange("protein_g", 15, 35);
+      // protein_g: 15-40g (cooked lean meats reach 35-40g/100g; was 35, widened per audit CF-3)
+      checkRange("protein_g", 15, 40);
       // fat_g: 1-30g
       checkRange("fat_g", 1, 30);
       // kcal: 100-300
@@ -372,8 +372,8 @@ function validateCategoryRules(
       checkRange("fiber_g", 0, 0);
       // sugars_g: 0-1g
       checkRange("sugars_g", 0, 1);
-      // protein_g: 15-30g
-      checkRange("protein_g", 15, 30);
+      // protein_g: 15-40g (dried fish/seafood can reach 40g+; was 30, widened per audit CF-3)
+      checkRange("protein_g", 15, 40);
       // fat_g: 0.5-15g
       checkRange("fat_g", 0.5, 15);
       // kcal: 70-250
