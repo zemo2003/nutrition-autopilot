@@ -8,7 +8,7 @@ import {
 import { nutrientKeys, type NutrientKey } from "@nutrition/contracts";
 import { searchAndGetBestMatch } from "../lib/usda-client.js";
 import { validateFoodProduct, computeConsensus, type NutrientSource } from "@nutrition/nutrition-engine";
-import usdaFallbackData from "../../../packages/data/usda-fallbacks.json" assert { type: "json" };
+import usdaFallbackData from "../../../../packages/data/usda-fallbacks.json" assert { type: "json" };
 
 type FullNutrients = Partial<Record<NutrientKey, number>>;
 
