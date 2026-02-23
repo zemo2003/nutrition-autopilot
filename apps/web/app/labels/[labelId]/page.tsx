@@ -309,7 +309,7 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
                     <span>Calories</span>
                     <span className="val">{r.calories ?? 0}</span>
                   </div>
-                  <div style={{ textAlign: "right", fontSize: "var(--text-xs)", fontWeight: 600, padding: "2px var(--sp-3)", borderBottom: "1px solid var(--line-soft)", opacity: 0.6 }}>% Daily Value*</div>
+                  <div style={{ textAlign: "right", fontSize: "var(--text-xs)", fontWeight: 600, padding: "2px var(--sp-3)", borderBottom: "1px solid var(--c-border-light)", opacity: 0.6 }}>% Daily Value*</div>
                   <div className="nutrition-row major" style={{ display: "flex", justifyContent: "space-between" }}>
                     <span><b>Total Fat</b> {r.fatG ?? 0}g</span>
                     <span className="val">{dv.fat_g != null ? `${Math.round(dv.fat_g)}%` : ""}</span>
@@ -367,7 +367,7 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
                     <span>Potassium {r.potassiumMg ?? Math.round(payload.perServing?.potassium_mg ?? 0)}mg</span>
                     <span className="val">{dv.potassium_mg != null ? `${Math.round(dv.potassium_mg)}%` : ""}</span>
                   </div>
-                  <div style={{ padding: "var(--sp-2) var(--sp-3)", fontSize: 10, lineHeight: 1.4, opacity: 0.55, borderTop: "1px solid var(--line-soft)" }}>
+                  <div style={{ padding: "var(--sp-2) var(--sp-3)", fontSize: 10, lineHeight: 1.4, opacity: 0.55, borderTop: "1px solid var(--c-border-light)" }}>
                     * The % Daily Value (DV) tells you how much a nutrient in a serving of food contributes to a daily diet. 2,000 calories a day is used for general nutrition advice.
                   </div>
                 </>
@@ -376,7 +376,7 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
                   <p className="label-text" style={{ marginBottom: "var(--sp-3)" }}>
                     Full Nutrient Profile ({nutrientDataset.label})
                   </p>
-                  <div style={{ maxHeight: 520, overflow: "auto", border: "1px solid var(--line-soft)", borderRadius: 10 }}>
+                  <div style={{ maxHeight: 520, overflow: "auto", border: "1px solid var(--c-border-light)", borderRadius: 10 }}>
                     {nutrients.map((row) => (
                       <div
                         key={row.key}
@@ -530,7 +530,7 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-sm)" }}>
                 <thead>
-                  <tr style={{ borderBottom: "2px solid var(--line-soft)", textAlign: "left" }}>
+                  <tr style={{ borderBottom: "2px solid var(--c-border-light)", textAlign: "left" }}>
                     <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600 }}>Ingredient</th>
                     <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600, textAlign: "right" }}>Grams</th>
                     <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600, textAlign: "right" }}>% of Serving</th>
@@ -542,7 +542,7 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
                 </thead>
                 <tbody>
                   {payload.ingredientBreakdown.map((ing, idx) => (
-                    <tr key={idx} style={{ borderBottom: "1px solid var(--line-soft)" }}>
+                    <tr key={idx} style={{ borderBottom: "1px solid var(--c-border-light)" }}>
                       <td style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 500 }}>{ing.ingredientName}</td>
                       <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>{ing.gramsPerServing.toFixed(1)}g</td>
                       <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>{ing.percentOfServing.toFixed(1)}%</td>
@@ -554,7 +554,7 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
                   ))}
                 </tbody>
                 <tfoot>
-                  <tr style={{ borderTop: "2px solid var(--line-soft)", fontWeight: 600 }}>
+                  <tr style={{ borderTop: "2px solid var(--c-border-light)", fontWeight: 600 }}>
                     <td style={{ padding: "var(--sp-3) var(--sp-4)" }}>Total</td>
                     <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>
                       {payload.ingredientBreakdown.reduce((s, i) => s + i.gramsPerServing, 0).toFixed(1)}g

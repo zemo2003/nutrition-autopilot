@@ -158,11 +158,11 @@ export default async function CalendarPage({
             <div className="state-icon">&#x1f4c5;</div>
             <div className="state-title">No Served Meals</div>
             <div className="state-desc">
-              No meals have been served for this client in {formatMonthLabel(month)}.
-              Run a Pilot Backfill to generate historical data.
+              No meals found for this client in {formatMonthLabel(month)}.
+              Import Instacart orders to populate your meal history.
             </div>
             <Link href="/upload" className="btn btn-primary mt-4">
-              Go to Upload Center
+              Import Data
             </Link>
           </div>
         </div>

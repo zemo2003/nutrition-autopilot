@@ -82,7 +82,7 @@ export default async function VerificationPage({
         <div>
           <h1 className="page-title">Verification Queue</h1>
           <p className="page-subtitle">
-            Nutrient-level review queue for historical rebuild and ongoing data quality.
+            Review flagged nutrient values to keep your labels accurate.
           </p>
         </div>
         <div className="page-header-actions">

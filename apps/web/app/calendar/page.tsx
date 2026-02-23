@@ -31,10 +31,10 @@ export default async function CalendarLandingPage() {
           <div className="state-icon">&#x1f4c5;</div>
           <div className="state-title">No Client Calendar Available</div>
           <div className="state-desc">
-            A historical calendar will appear once at least one client and served meal exist.
+            Your meal calendar will appear once you've imported data and served meals.
           </div>
           <Link href="/upload" className="btn btn-primary mt-4">
-            Go to Upload Center
+            Import Data
           </Link>
         </div>
       </div>

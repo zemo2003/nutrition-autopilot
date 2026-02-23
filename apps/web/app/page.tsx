@@ -102,12 +102,12 @@ export default async function HomePage() {
         <div>
           <h1 className="page-title">Dashboard</h1>
           <p className="page-subtitle">
-            Nutrition operations overview with immutable label traceability.
+            Your weekly nutrition overview at a glance.
           </p>
         </div>
         <div className="page-header-actions">
           <Link href="/upload" className="btn btn-primary btn-lg">
-            Upload + Backfill
+            Import Data
           </Link>
         </div>
       </div>
@@ -118,18 +118,17 @@ export default async function HomePage() {
             <div className="state-icon">&#x1f4e6;</div>
             <div className="state-title">No Data Yet</div>
             <div className="state-desc">
-              Import a Source of Truth workbook or run a Pilot Backfill to populate
-              SKUs, recipes, and nutrition labels.
+              Upload your SKU catalog and Instacart orders to get started.
             </div>
             <Link href="/upload" className="btn btn-primary mt-4">
-              Go to Upload Center
+              Import Data
             </Link>
           </div>
         </section>
       ) : (
         <>
           <section className="section">
-            <h2 className="section-title">System Overview</h2>
+            <h2 className="section-title">Overview</h2>
             <div className="kpi-grid">
               <div className="kpi">
                 <div className="kpi-value">{state.counts.activeSkus}</div>
@@ -185,7 +184,7 @@ export default async function HomePage() {
                 </div>
                 <div className="kpi">
                   <div className="kpi-value">{quality.evidence.inferredRows}</div>
-                  <div className="kpi-label">Inferred Nutrient Rows</div>
+                  <div className="kpi-label">Estimated Nutrients</div>
                 </div>
                 <div className="kpi">
                   <div className="kpi-value">{quality.evidence.exceptionRows}</div>
@@ -193,7 +192,7 @@ export default async function HomePage() {
                 </div>
                 <div className="kpi">
                   <div className="kpi-value">{quality.evidence.floorRows}</div>
-                  <div className="kpi-label">Legacy Floor Rows</div>
+                  <div className="kpi-label">Fallback Values</div>
                 </div>
                 <div className="kpi">
                   <div className="kpi-value">{quality.totals.criticalOrHighVerificationTasks}</div>

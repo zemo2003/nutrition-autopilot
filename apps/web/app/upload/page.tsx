@@ -1,5 +1,4 @@
 import { UploadForm } from "../../components/upload-form";
-import { PilotBackfillForm } from "../../components/pilot-backfill-form";
 import Link from "next/link";
 
 export default function UploadPage() {
@@ -8,14 +7,14 @@ export default function UploadPage() {
       <div className="breadcrumbs">
         <Link href="/">Dashboard</Link>
         <span className="sep">/</span>
-        <span className="current">Upload Center</span>
+        <span className="current">Import</span>
       </div>
 
       <div className="page-header">
         <div>
-          <h1 className="page-title">Upload Center</h1>
+          <h1 className="page-title">Import Data</h1>
           <p className="page-subtitle">
-            Import data and run backfills. Start with Pilot Backfill for instant historical labels.
+            Upload your SKU catalog or Instacart orders to keep your nutrition data current.
           </p>
         </div>
         <div className="page-header-actions">
@@ -26,16 +25,10 @@ export default function UploadPage() {
       </div>
 
       <div className="stack" style={{ gap: "var(--sp-6)" }}>
-        <PilotBackfillForm />
-
-        <hr className="divider" />
-
-        <h2 className="section-title">Individual Imports</h2>
-
         <UploadForm
           endpoint="/v1/imports/sot"
-          label="Upload SKU SOT"
-          description="Import Source of Truth workbook with SKU Master, Recipe Lines, and Ingredients sheets."
+          label="Upload SKU Catalog"
+          description="Import your Source of Truth workbook with SKU Master, Recipe Lines, and Ingredients."
           modeLabel="Commit"
           acceptTypes=".xlsx,.xls"
         />
@@ -43,7 +36,7 @@ export default function UploadPage() {
         <UploadForm
           endpoint="/v1/imports/instacart-orders"
           label="Upload Instacart Orders"
-          description="Import Instacart order history CSV or workbook to create inventory lots with nutrient hints."
+          description="Import Instacart order history to update inventory and generate nutrition labels."
           modeLabel="Commit"
           acceptTypes=".xlsx,.xls,.csv"
         />
