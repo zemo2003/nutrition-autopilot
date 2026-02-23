@@ -65,13 +65,6 @@ type LabelPayload = {
   percentDV?: Record<string, number>;
 };
 
-type LineageNode = {
-  labelId: string;
-  labelType: string;
-  title: string;
-  children?: LineageNode[];
-};
-
 // Macros only — micronutrients hidden until data quality is tightened
 const nutrientOrder = [
   "kcal",
@@ -134,33 +127,9 @@ async function getLabel(labelId: string) {
   return response.json();
 }
 
-async function getLineage(labelId: string) {
-  const response = await fetch(`${API_BASE}/v1/labels/${labelId}/lineage`, { cache: "no-store" });
-  if (!response.ok) return null;
-  return response.json();
-}
-
-function LineageTree({ node }: { node: LineageNode }) {
-  return (
-    <li>
-      <Link href={`/labels/${node.labelId}`} className="lineage-node">
-        <span className="lineage-type">{node.labelType}</span>
-        {node.title}
-      </Link>
-      {node.children?.length ? (
-        <ul>
-          {node.children.map((child) => (
-            <LineageTree key={child.labelId} node={child} />
-          ))}
-        </ul>
-      ) : null}
-    </li>
-  );
-}
-
 export default async function LabelPage({ params }: { params: Promise<{ labelId: string }> }) {
   const { labelId } = await params;
-  const [label, lineage] = await Promise.all([getLabel(labelId), getLineage(labelId)]);
+  const label = await getLabel(labelId);
 
   if (!label) {
     return (
@@ -180,13 +149,11 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
   }
 
   const payload = (label.renderPayload ?? {}) as LabelPayload;
-  const evidence = payload.evidenceSummary ?? (label.evidenceSummary as LabelPayload["evidenceSummary"]);
-  const provisional = Boolean(label.provisional ?? payload.provisional ?? evidence?.provisional);
+  const provisional = Boolean(label.provisional ?? payload.provisional);
   const supersededByLabelId =
     typeof label.supersededByLabelId === "string" && label.supersededByLabelId.length > 0
       ? label.supersededByLabelId
       : null;
-  const reasonCodes = payload.reasonCodes ?? [];
   const r = payload.roundedFda ?? {};
   const dv = payload.percentDV ?? {};
   const nutrientDataset = resolveNutrientDataset(payload);
@@ -235,26 +202,6 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
             <Link href={`/labels/${supersededByLabelId}`} className="btn btn-primary">
               Open Latest Snapshot
             </Link>
-          </div>
-        </section>
-      ) : null}
-
-      {provisional ? (
-        <section className="card section">
-          <div className="card-header">
-            <h3>Evidence Warnings</h3>
-            <span className="badge badge-warn">Provisional</span>
-          </div>
-          <div className="row">
-            {reasonCodes.length ? (
-              reasonCodes.map((code) => (
-                <span key={code} className="tag">
-                  {code}
-                </span>
-              ))
-            ) : (
-              <span className="label-text">No reason codes provided.</span>
-            )}
           </div>
         </section>
       ) : null}
@@ -422,72 +369,6 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
             )}
           </div>
 
-          {payload.plausibility ? (
-            <div className="card">
-              <div className="card-header">
-                <h3>Plausibility Check</h3>
-                {payload.plausibility.valid
-                  ? <span className="badge badge-success">Valid</span>
-                  : <span className="badge badge-danger">{payload.plausibility.errorCount ?? 0} Error{(payload.plausibility.errorCount ?? 0) !== 1 ? "s" : ""}</span>
-                }
-              </div>
-              <div className="qa-block">
-                <div className="qa-metric">
-                  <div className="qa-metric-value">{payload.plausibility.errorCount ?? 0}</div>
-                  <div className="qa-metric-label">Errors</div>
-                </div>
-                <div className="qa-metric">
-                  <div className="qa-metric-value">{payload.plausibility.warningCount ?? 0}</div>
-                  <div className="qa-metric-label">Warnings</div>
-                </div>
-              </div>
-              {payload.plausibility.issues?.length ? (
-                <div style={{ padding: "0 var(--sp-4) var(--sp-4)", maxHeight: 200, overflow: "auto" }}>
-                  {payload.plausibility.issues.map((issue, idx) => (
-                    <div key={idx} style={{
-                      padding: "var(--sp-2) var(--sp-3)",
-                      marginBottom: 4,
-                      borderRadius: 6,
-                      fontSize: "var(--text-sm)",
-                      backgroundColor: issue.severity === "ERROR" ? "rgba(239,68,68,0.08)" : "rgba(245,158,11,0.08)",
-                      borderLeft: `3px solid ${issue.severity === "ERROR" ? "var(--danger)" : "var(--warning, #f59e0b)"}`
-                    }}>
-                      {issue.message}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          <div className="card">
-            <div className="card-header">
-              <h3>Evidence Summary</h3>
-              {evidence?.provisional ? <span className="badge badge-warn">Needs Review</span> : <span className="badge badge-success">Stable</span>}
-            </div>
-            {evidence ? (
-              <div className="qa-block">
-                <div className="qa-metric">
-                  <div className="qa-metric-value">{evidence.verifiedCount ?? 0}</div>
-                  <div className="qa-metric-label">Verified</div>
-                </div>
-                <div className="qa-metric">
-                  <div className="qa-metric-value">{evidence.inferredCount ?? 0}</div>
-                  <div className="qa-metric-label">Inferred</div>
-                </div>
-                <div className="qa-metric">
-                  <div className="qa-metric-value">{evidence.exceptionCount ?? 0}</div>
-                  <div className="qa-metric-label">Exceptions</div>
-                </div>
-                <div className="qa-metric">
-                  <div className="qa-metric-value">{evidence.unverifiedCount ?? 0}</div>
-                  <div className="qa-metric-label">Unverified</div>
-                </div>
-              </div>
-            ) : (
-              <p className="label-text">No evidence summary available.</p>
-            )}
-          </div>
         </section>
       </div>
 
@@ -578,30 +459,6 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
         </section>
       ) : null}
 
-      <section className="section mt-8">
-        <div className="card">
-          <div className="card-header">
-            <h3>Label Lineage</h3>
-            <span className="badge badge-neutral">Immutable</span>
-          </div>
-          {lineage ? (
-            <ul className="lineage-tree">
-              <LineageTree node={lineage as LineageNode} />
-            </ul>
-          ) : (
-            <p className="label-text">No lineage edges recorded for this label.</p>
-          )}
-        </div>
-      </section>
-
-      <section className="section">
-        <details className="card">
-          <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: "var(--text-sm)" }}>
-            Raw Payload (JSON)
-          </summary>
-          <pre className="mt-4">{JSON.stringify(label.renderPayload, null, 2)}</pre>
-        </details>
-      </section>
     </div>
   );
 }

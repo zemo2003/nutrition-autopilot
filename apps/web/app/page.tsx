@@ -172,11 +172,7 @@ export default async function HomePage() {
               <div className="kpi-grid">
                 <div className="kpi">
                   <div className="kpi-value">{(quality.coverage.productFull40CoverageRatio * 100).toFixed(0)}%</div>
-                  <div className="kpi-label">Product 40-Key Coverage</div>
-                </div>
-                <div className="kpi">
-                  <div className="kpi-value">{(quality.coverage.finalLabelFull40CoverageRatio * 100).toFixed(0)}%</div>
-                  <div className="kpi-label">Final Label 40-Key Coverage</div>
+                  <div className="kpi-label">Nutrient Coverage</div>
                 </div>
                 <div className="kpi">
                   <div className="kpi-value">{quality.evidence.provisionalLabels}</div>
@@ -187,18 +183,10 @@ export default async function HomePage() {
                   <div className="kpi-label">Estimated Nutrients</div>
                 </div>
                 <div className="kpi">
-                  <div className="kpi-value">{quality.evidence.exceptionRows}</div>
-                  <div className="kpi-label">Historical Exceptions</div>
-                </div>
-                <div className="kpi">
-                  <div className="kpi-value">{quality.evidence.floorRows}</div>
-                  <div className="kpi-label">Fallback Values</div>
-                </div>
-                <div className="kpi">
                   <div className="kpi-value">{quality.totals.criticalOrHighVerificationTasks}</div>
-                  <div className="kpi-label">High/Critical Verifications</div>
+                  <div className="kpi-label">Open Verifications</div>
                   <div className="kpi-note">
-                    <Link href={"/verification" as any} className="btn btn-outline btn-sm">Open Queue</Link>
+                    <Link href={"/verification" as any} className="btn btn-outline btn-sm">Review</Link>
                   </div>
                 </div>
               </div>
