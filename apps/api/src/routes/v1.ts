@@ -1000,11 +1000,24 @@ v1Router.get("/labels/:labelId", async (req, res) => {
   const payload = (label.renderPayload ?? {}) as Record<string, unknown>;
   const evidenceSummary = (payload.evidenceSummary ?? null) as Record<string, unknown> | null;
   const provisional = Boolean(payload.provisional ?? evidenceSummary?.provisional ?? false);
+  const latestForEntity = await prisma.labelSnapshot.findFirst({
+    where: {
+      organizationId: label.organizationId,
+      labelType: label.labelType,
+      externalRefId: label.externalRefId
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { id: true }
+  });
+  const supersededByLabelId =
+    latestForEntity && latestForEntity.id !== label.id ? latestForEntity.id : null;
 
   return res.json({
     ...label,
     provisional,
-    evidenceSummary
+    evidenceSummary,
+    supersededByLabelId,
+    isLatest: supersededByLabelId === null
   });
 });
 

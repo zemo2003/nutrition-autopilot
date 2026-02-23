@@ -23,6 +23,27 @@ import psycopg2
 import psycopg2.extras
 
 TRACE_VALUE_THRESHOLD = 0.00011
+CARB_SUGAR_KEYS = {"carb_g", "fiber_g", "sugars_g", "added_sugars_g"}
+PLAIN_ANIMAL_PROTEIN_TOKENS = ("BEEF", "CHICKEN", "TURKEY", "COD", "TUNA", "FISH")
+PLAIN_ANIMAL_PROTEIN_EXCLUSIONS = (
+    "BAR",
+    "BREAD",
+    "BAGEL",
+    "TORTILLA",
+    "PASTA",
+    "RICE",
+    "BEAN",
+    "YOGURT",
+    "CHEESE",
+    "MILK",
+    "WHEY",
+    "SAUSAGE",
+    "NUGGET",
+    "BREADED",
+    "SAUCE",
+    "JERKY",
+    "DRINK",
+)
 
 DEFAULT_FALLBACKS: Dict[str, float] = {
     "kcal": 120.0,
@@ -158,6 +179,9 @@ def load_reference_medians(cur: psycopg2.extensions.cursor, organization_id: str
         where p."organizationId" = %s
           and pnv."valuePer100g" is not null
           and pnv."valuePer100g" > %s
+          and pnv."sourceRef" not like 'agent:auto-verify:%%'
+          and pnv."sourceRef" not like 'similar-product:global:%%'
+          and coalesce(pnv."evidenceGrade"::text, '') not in ('INFERRED_FROM_SIMILAR_PRODUCT', 'HISTORICAL_EXCEPTION')
         ''',
         (organization_id, TRACE_VALUE_THRESHOLD),
     )
@@ -189,13 +213,24 @@ def load_reference_medians(cur: psycopg2.extensions.cursor, organization_id: str
     return ingredient_medians, global_medians
 
 
+def is_plain_animal_protein_key(ingredient_key: str) -> bool:
+    haystack = str(ingredient_key or "").upper()
+    if any(token in haystack for token in PLAIN_ANIMAL_PROTEIN_EXCLUSIONS):
+        return False
+    return any(token in haystack for token in PLAIN_ANIMAL_PROTEIN_TOKENS)
+
+
 def choose_repair_value(
     *,
     nutrient_key: str,
     ingredient_id: str,
+    ingredient_key: str,
     ingredient_medians: Dict[str, Dict[str, float]],
     global_medians: Dict[str, float],
 ) -> Tuple[float, str, str, float]:
+    if nutrient_key in CARB_SUGAR_KEYS and is_plain_animal_protein_key(ingredient_key):
+        return 0.0, "sanity-rule:animal-protein-zero-carb", "INFERRED_FROM_INGREDIENT", 0.8
+
     ing_value = ingredient_medians.get(ingredient_id, {}).get(nutrient_key)
     if isinstance(ing_value, (int, float)) and float(ing_value) > TRACE_VALUE_THRESHOLD:
         return float(ing_value), "agent:auto-verify:ingredient-median", "INFERRED_FROM_INGREDIENT", 0.65
@@ -257,12 +292,21 @@ def main() -> int:
             if target_products is None:
                 read_cur.execute(
                     '''
-                    select pnv.id, pnv."productId", p."ingredientId", nd.key, pnv."valuePer100g"
+                    select pnv.id, pnv."productId", p."ingredientId", i."canonicalKey", nd.key, pnv."valuePer100g"
                     from "ProductNutrientValue" pnv
                     join "ProductCatalog" p on p.id = pnv."productId"
+                    join "IngredientCatalog" i on i.id = p."ingredientId"
                     join "NutrientDefinition" nd on nd.id = pnv."nutrientDefinitionId"
                     where p."organizationId" = %s
-                      and (pnv."valuePer100g" is null or pnv."valuePer100g" <= %s)
+                      and (
+                        pnv."valuePer100g" is null
+                        or pnv."sourceRef" = 'agent:trace-floor-imputation'
+                        or pnv."sourceRef" = 'historical-cleanup:pending-rebuild'
+                        or (
+                          pnv."valuePer100g" <= %s
+                          and pnv."sourceRef" like 'agent:auto-verify:%%'
+                        )
+                      )
                     ''',
                     (organization_id, TRACE_VALUE_THRESHOLD),
                 )
@@ -270,13 +314,22 @@ def main() -> int:
                 summary["targetProducts"] = len(target_products)
                 read_cur.execute(
                     '''
-                    select pnv.id, pnv."productId", p."ingredientId", nd.key, pnv."valuePer100g"
+                    select pnv.id, pnv."productId", p."ingredientId", i."canonicalKey", nd.key, pnv."valuePer100g"
                     from "ProductNutrientValue" pnv
                     join "ProductCatalog" p on p.id = pnv."productId"
+                    join "IngredientCatalog" i on i.id = p."ingredientId"
                     join "NutrientDefinition" nd on nd.id = pnv."nutrientDefinitionId"
                     where p."organizationId" = %s
                       and pnv."productId" = any(%s)
-                      and (pnv."valuePer100g" is null or pnv."valuePer100g" <= %s)
+                      and (
+                        pnv."valuePer100g" is null
+                        or pnv."sourceRef" = 'agent:trace-floor-imputation'
+                        or pnv."sourceRef" = 'historical-cleanup:pending-rebuild'
+                        or (
+                          pnv."valuePer100g" <= %s
+                          and pnv."sourceRef" like 'agent:auto-verify:%%'
+                        )
+                      )
                     ''',
                     (organization_id, list(target_products), TRACE_VALUE_THRESHOLD),
                 )
@@ -288,6 +341,7 @@ def main() -> int:
                 repair_value, source_ref, evidence_grade, confidence = choose_repair_value(
                     nutrient_key=str(row["key"]),
                     ingredient_id=str(row["ingredientId"]),
+                    ingredient_key=str(row.get("canonicalKey") or ""),
                     ingredient_medians=ingredient_medians,
                     global_medians=global_medians,
                 )

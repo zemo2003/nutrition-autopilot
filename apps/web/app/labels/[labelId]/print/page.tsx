@@ -157,6 +157,10 @@ export default async function PrintLabelPage({ params }: { params: Promise<{ lab
   const payload = (label.renderPayload ?? {}) as LabelPayload;
   const evidence = payload.evidenceSummary ?? (label.evidenceSummary as LabelPayload["evidenceSummary"]);
   const provisional = Boolean(label.provisional ?? payload.provisional ?? evidence?.provisional);
+  const supersededByLabelId =
+    typeof label.supersededByLabelId === "string" && label.supersededByLabelId.length > 0
+      ? label.supersededByLabelId
+      : null;
   const reasonCodes = payload.reasonCodes ?? [];
   const r = payload.roundedFda ?? {};
   const hasFda = Boolean(payload.roundedFda);
@@ -179,11 +183,28 @@ export default async function PrintLabelPage({ params }: { params: Promise<{ lab
         </div>
         <div className="page-header-actions">
           <PrintButton />
+          {supersededByLabelId ? (
+            <Link href={`/labels/${supersededByLabelId}/print`} className="btn btn-primary">
+              Open Latest Print
+            </Link>
+          ) : null}
           <Link href={`/labels/${labelId}`} className="btn btn-outline">
             Back to Label
           </Link>
         </div>
       </div>
+
+      {supersededByLabelId ? (
+        <section className="card section no-print">
+          <div className="card-header">
+            <h3>Superseded Snapshot</h3>
+            <span className="badge badge-warn">Outdated</span>
+          </div>
+          <p className="label-text">
+            This print page is for an older immutable snapshot. Use the latest corrected snapshot for current reporting.
+          </p>
+        </section>
+      ) : null}
 
       <section className="print-label">
         <div className="print-label-inner">

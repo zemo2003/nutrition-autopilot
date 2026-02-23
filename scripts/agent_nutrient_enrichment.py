@@ -162,6 +162,28 @@ DEFAULT_SIMILAR_FALLBACKS: Dict[str, float] = {
     "omega6_g": 0.3,
 }
 
+CARB_SUGAR_KEYS = {"carb_g", "fiber_g", "sugars_g", "added_sugars_g"}
+PLAIN_ANIMAL_PROTEIN_TOKENS = ("BEEF", "CHICKEN", "TURKEY", "COD", "TUNA", "FISH")
+PLAIN_ANIMAL_PROTEIN_EXCLUSIONS = (
+    "BAR",
+    "BREAD",
+    "BAGEL",
+    "TORTILLA",
+    "PASTA",
+    "RICE",
+    "BEAN",
+    "YOGURT",
+    "CHEESE",
+    "MILK",
+    "WHEY",
+    "SAUSAGE",
+    "NUGGET",
+    "BREADED",
+    "SAUCE",
+    "JERKY",
+    "DRINK",
+)
+
 OFF_FIELD_TO_KEY = {
     "energy-kcal_100g": "kcal",
     "proteins_100g": "protein_g",
@@ -324,6 +346,39 @@ class SourceValue:
     evidence_grade: str
     confidence: float
     historical_exception: bool
+
+
+def is_plain_animal_protein(product: ProductRow) -> bool:
+    haystack = " ".join(
+        [
+            product.ingredient_key or "",
+            product.ingredient_name or "",
+            product.product_name or "",
+            product.brand or "",
+        ]
+    ).upper()
+    if any(token in haystack for token in PLAIN_ANIMAL_PROTEIN_EXCLUSIONS):
+        return False
+    return any(token in haystack for token in PLAIN_ANIMAL_PROTEIN_TOKENS)
+
+
+def forced_zero_for_missing_key(
+    product: ProductRow,
+    nutrient_key: str,
+    historical_mode: bool,
+) -> Optional[SourceValue]:
+    if nutrient_key not in CARB_SUGAR_KEYS:
+        return None
+    if not is_plain_animal_protein(product):
+        return None
+    return SourceValue(
+        value=0.0,
+        source_type="DERIVED",
+        source_ref="sanity-rule:animal-protein-zero-carb",
+        evidence_grade="INFERRED_FROM_INGREDIENT",
+        confidence=0.8,
+        historical_exception=historical_mode,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -819,6 +874,13 @@ def load_existing_values(
         source_ref = str(source_ref)
         if source_ref in {"agent:trace-floor-imputation", "historical-cleanup:pending-rebuild"}:
             continue
+        # Skip low-quality inferred fills so authoritative source fetches can replace them.
+        if source_ref.startswith("agent:auto-verify:"):
+            continue
+        if source_ref.startswith("similar-product:global:"):
+            continue
+        if str(evidence_grade) in {"INFERRED_FROM_SIMILAR_PRODUCT", "HISTORICAL_EXCEPTION"}:
+            continue
         parsed_value = parse_number(value)
         if parsed_value is None:
             continue
@@ -869,13 +931,21 @@ def resolve_product_profile(
 
     # 1) existing uploaded hints and trusted DB values
     for key, value in existing_values.items():
+        if value.source_type in {"MANUAL", "MANUFACTURER"}:
+            baseline_confidence = 0.95
+        elif value.source_type == "USDA":
+            baseline_confidence = 0.82
+        elif value.evidence_grade == "INFERRED_FROM_INGREDIENT":
+            baseline_confidence = 0.55
+        else:
+            baseline_confidence = 0.35
         merge_values(
             merged,
             {key: value.value},
             source_type=value.source_type,
             source_ref=value.source_ref,
             evidence_grade=value.evidence_grade,
-            confidence=max(value.confidence, 0.95 if value.source_type in {"MANUAL", "MANUFACTURER"} else 0.85),
+            confidence=max(value.confidence, baseline_confidence),
             historical_exception=value.historical_exception,
         )
 
@@ -964,6 +1034,11 @@ def fill_from_similar_products(
             resolved = resolved_by_product.setdefault(product.product_id, {})
             for key in TARGET_KEYS:
                 if key in resolved:
+                    continue
+
+                forced = forced_zero_for_missing_key(product, key, historical_mode)
+                if forced is not None:
+                    resolved[key] = forced
                     continue
 
                 donor_value: Optional[Tuple[float, str]] = None

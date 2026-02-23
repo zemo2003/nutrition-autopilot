@@ -190,6 +190,10 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
   const payload = (label.renderPayload ?? {}) as LabelPayload;
   const evidence = payload.evidenceSummary ?? (label.evidenceSummary as LabelPayload["evidenceSummary"]);
   const provisional = Boolean(label.provisional ?? payload.provisional ?? evidence?.provisional);
+  const supersededByLabelId =
+    typeof label.supersededByLabelId === "string" && label.supersededByLabelId.length > 0
+      ? label.supersededByLabelId
+      : null;
   const reasonCodes = payload.reasonCodes ?? [];
   const r = payload.roundedFda ?? {};
   const nutrientDataset = resolveNutrientDataset(payload);
@@ -224,6 +228,23 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
           <Link href="/" className="btn btn-outline">Dashboard</Link>
         </div>
       </div>
+
+      {supersededByLabelId ? (
+        <section className="card section">
+          <div className="card-header">
+            <h3>Superseded Snapshot</h3>
+            <span className="badge badge-warn">Outdated</span>
+          </div>
+          <p className="label-text">
+            This label snapshot is immutable history and has been superseded by a newer corrected snapshot.
+          </p>
+          <div className="row mt-3">
+            <Link href={`/labels/${supersededByLabelId}`} className="btn btn-primary">
+              Open Latest Snapshot
+            </Link>
+          </div>
+        </section>
+      ) : null}
 
       {provisional ? (
         <section className="card section">
