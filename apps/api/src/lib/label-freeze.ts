@@ -102,6 +102,10 @@ function toNutrientMap(values: NutrientRow[]): NutrientMap {
     if (!nutrientKeys.includes(key)) continue;
     out[key] = row.valuePer100g;
   }
+  // Fix ghost-nutrient pattern at the per-100g level:
+  // if sub-components (sat_fat, sugars, fiber) exceed their parent macro,
+  // promote the parent so downstream aggregation stays consistent.
+  enforceNutrientHierarchy(out);
   return out;
 }
 
@@ -179,6 +183,48 @@ function summarizeEvidence(rows: NutrientRow[], syntheticLot: boolean): Evidence
   };
 }
 
+/**
+ * Enforce nutrient hierarchy invariants:
+ *   sat_fat_g + trans_fat_g <= fat_g
+ *   sugars_g <= carb_g
+ *   added_sugars_g <= sugars_g
+ *   fiber_g <= carb_g
+ *
+ * When sub-components exceed their parent macro (due to data imported
+ * independently per-nutrient), promote the parent to the sum of its
+ * children so the label stays internally consistent.
+ */
+function enforceNutrientHierarchy(map: NutrientMap): void {
+  // Carb children: sugars and fiber both come from carbohydrate
+  const sugars = map.sugars_g ?? 0;
+  const addedSugars = map.added_sugars_g ?? 0;
+  const fiber = map.fiber_g ?? 0;
+  const carbFloor = Math.max(sugars, fiber, sugars + fiber);
+  if ((map.carb_g ?? 0) < carbFloor) {
+    map.carb_g = carbFloor;
+  }
+
+  // Fat children: sat_fat and trans_fat come from total fat
+  const satFat = map.sat_fat_g ?? 0;
+  const transFat = map.trans_fat_g ?? 0;
+  const fatFloor = satFat + transFat;
+  if ((map.fat_g ?? 0) < fatFloor) {
+    map.fat_g = fatFloor;
+  }
+
+  // Added sugars can't exceed total sugars
+  if (addedSugars > sugars) {
+    map.added_sugars_g = sugars;
+  }
+
+  // Recalculate kcal floor from Atwater if macros were promoted
+  const atwaterKcal = (map.protein_g ?? 0) * 4 + (map.carb_g ?? 0) * 4 + (map.fat_g ?? 0) * 9;
+  if ((map.kcal ?? 0) < atwaterKcal * 0.5) {
+    // kcal is implausibly low relative to macros — use Atwater estimate
+    map.kcal = Math.round(atwaterKcal * 10) / 10;
+  }
+}
+
 function aggregateNutrientsByLots(lots: ConsumedLot[], servings: number): {
   total: NutrientMap;
   perServing: NutrientMap;
@@ -192,6 +238,9 @@ function aggregateNutrientsByLots(lots: ConsumedLot[], servings: number): {
       total[key] = (total[key] ?? 0) + (value * lot.gramsConsumed) / 100;
     }
   }
+
+  // Enforce hierarchy on totals before dividing by servings
+  enforceNutrientHierarchy(total);
 
   const perServing = emptyNutrientMap();
   for (const key of nutrientKeys) {

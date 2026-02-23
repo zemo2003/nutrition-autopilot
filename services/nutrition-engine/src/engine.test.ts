@@ -68,18 +68,18 @@ describe("FDA Rounding - Calories", () => {
   it("rounds calories 5-50 to nearest 5", () => {
     expect(roundCalories(5.0)).toBe(5);
     expect(roundCalories(5.1)).toBe(5);
-    expect(roundCalories(7.5)).toBe(8); // rounds up
-    expect(roundCalories(12.5)).toBe(12); // banker's rounding
+    expect(roundCalories(7.5)).toBe(10); // 7.5 rounds to nearest 5 → 10
+    expect(roundCalories(12.5)).toBe(15); // 12.5 rounds to nearest 5 → 15
     expect(roundCalories(25)).toBe(25);
     expect(roundCalories(50)).toBe(50);
   });
 
   it("rounds calories > 50 to nearest 10", () => {
     expect(roundCalories(50.1)).toBe(50);
-    expect(roundCalories(54.9)).toBe(55);
-    expect(roundCalories(55)).toBe(55);
+    expect(roundCalories(54.9)).toBe(50);
+    expect(roundCalories(55)).toBe(60);
     expect(roundCalories(100)).toBe(100);
-    expect(roundCalories(165.4)).toBe(165);
+    expect(roundCalories(165.4)).toBe(170);
     expect(roundCalories(500)).toBe(500);
   });
 });
@@ -117,7 +117,7 @@ describe("FDA Rounding - General grams", () => {
   });
 
   it("rounds general g >= 0.5 to nearest 1", () => {
-    expect(roundGeneralG(0.5)).toBe(0);
+    expect(roundGeneralG(0.5)).toBe(1); // Math.round(0.5) = 1
     expect(roundGeneralG(0.6)).toBe(1);
     expect(roundGeneralG(1.4)).toBe(1);
     expect(roundGeneralG(1.5)).toBe(2);
@@ -135,15 +135,15 @@ describe("FDA Rounding - Sodium", () => {
 
   it("rounds sodium 5-140mg to nearest 5", () => {
     expect(roundSodiumMg(5)).toBe(5);
-    expect(roundSodiumMg(7.5)).toBe(8);
+    expect(roundSodiumMg(7.5)).toBe(10); // 7.5 rounds to nearest 5 → 10
     expect(roundSodiumMg(50)).toBe(50);
     expect(roundSodiumMg(140)).toBe(140);
   });
 
   it("rounds sodium > 140mg to nearest 10", () => {
     expect(roundSodiumMg(140.1)).toBe(140);
-    expect(roundSodiumMg(145)).toBe(145);
-    expect(roundSodiumMg(315)).toBe(315);
+    expect(roundSodiumMg(145)).toBe(150); // 145 rounds to nearest 10 → 150
+    expect(roundSodiumMg(315)).toBe(320); // 315 rounds to nearest 10 → 320
     expect(roundSodiumMg(2300)).toBe(2300);
   });
 });
@@ -183,7 +183,7 @@ describe("FDA Rounding - Micronutrients", () => {
     expect(roundIron(0.5)).toBe(0.5);
     expect(roundIron(2.14)).toBe(2.1);
     expect(roundIron(5.1)).toBe(5);
-    expect(roundIron(10.5)).toBe(10);
+    expect(roundIron(10.5)).toBe(11);
   });
 
   it("rounds potassium to nearest 10 mg (with < 5mg = 0)", () => {
@@ -196,7 +196,7 @@ describe("FDA Rounding - Micronutrients", () => {
   it("rounds vitamin A to nearest 5 mcg (with < 2.5mcg = 0)", () => {
     expect(roundVitaminA(0)).toBe(0);
     expect(roundVitaminA(2.4)).toBe(0);
-    expect(roundVitaminA(2.5)).toBe(0);
+    expect(roundVitaminA(2.5)).toBe(5); // 2.5 is not < 2.5, rounds to 5
     expect(roundVitaminA(2.6)).toBe(5);
     expect(roundVitaminA(900)).toBe(900);
   });
@@ -204,7 +204,7 @@ describe("FDA Rounding - Micronutrients", () => {
   it("rounds vitamin C to nearest 5 mg", () => {
     expect(roundVitaminC(0)).toBe(0);
     expect(roundVitaminC(2.4)).toBe(0);
-    expect(roundVitaminC(2.5)).toBe(0);
+    expect(roundVitaminC(2.5)).toBe(5); // 2.5 is not < 2.5, rounds to 5
     expect(roundVitaminC(2.6)).toBe(5);
     expect(roundVitaminC(90)).toBe(90);
   });
@@ -212,7 +212,7 @@ describe("FDA Rounding - Micronutrients", () => {
   it("rounds vitamin E to nearest 1 mg", () => {
     expect(roundVitaminE(0)).toBe(0);
     expect(roundVitaminE(0.4)).toBe(0);
-    expect(roundVitaminE(0.5)).toBe(0);
+    expect(roundVitaminE(0.5)).toBe(1); // 0.5 is not < 0.5, Math.round(0.5) = 1
     expect(roundVitaminE(0.6)).toBe(1);
     expect(roundVitaminE(15)).toBe(15);
   });
@@ -220,7 +220,7 @@ describe("FDA Rounding - Micronutrients", () => {
   it("rounds vitamin K to nearest 1 mcg", () => {
     expect(roundVitaminK(0)).toBe(0);
     expect(roundVitaminK(0.4)).toBe(0);
-    expect(roundVitaminK(0.5)).toBe(0);
+    expect(roundVitaminK(0.5)).toBe(1); // 0.5 is not < 0.5, Math.round(0.5) = 1
     expect(roundVitaminK(0.6)).toBe(1);
     expect(roundVitaminK(120)).toBe(120);
   });
@@ -341,7 +341,7 @@ describe("FDA Rounding - Percent Daily Value", () => {
 
   it("rounds %DV 2-10% to nearest 2%", () => {
     expect(roundPercentDV(2)).toBe(2);
-    expect(roundPercentDV(3)).toBe(2);
+    expect(roundPercentDV(3)).toBe(4); // Math.round(3/2)*2 = Math.round(1.5)*2 = 4
     expect(roundPercentDV(4)).toBe(4);
     expect(roundPercentDV(9)).toBe(10);
     expect(roundPercentDV(10)).toBe(10);
@@ -719,7 +719,9 @@ describe("Engine - Allergen detection", () => {
 
 describe("Engine - QA Checks (±20% Class I tolerance)", () => {
   it("passes when error is at boundary (20%)", () => {
-    // 100 kcal meal, 20 kcal error = 20%
+    // macroKcal = protein*4 + carb*4 + fat*9 = 5*4 + 25*4 + 0*9 = 120
+    // rawCalories = 100, delta = |120 - 100| = 20
+    // percentError = |delta / rawCalories| = 20/100 = 0.20 exactly
     const result = computeSkuLabel({
       skuName: "Test",
       recipeName: "Test",
@@ -739,12 +741,10 @@ describe("Engine - QA Checks (±20% Class I tolerance)", () => {
           productId: "prod1",
           productName: "Test",
           gramsConsumed: 100,
-          // protein=5g (20kcal) + carb=20g (80kcal) + fat=0g = 100 macro kcal
-          // but report 80 kcal -> delta = 20, error = 20/100 = 20%
           nutrientsPer100g: {
-            kcal: 80,
+            kcal: 100,
             protein_g: 5,
-            carb_g: 20,
+            carb_g: 25,
             fat_g: 0,
           },
         },
