@@ -937,6 +937,90 @@ v1Router.get("/clients/:clientId/calendar", async (req, res) => {
   });
 });
 
+v1Router.get("/clients/:clientId/calendar/export", async (req, res) => {
+  const XLSX = await import("xlsx");
+  const org = await getPrimaryOrganization();
+  const { clientId } = req.params;
+  const month = String(req.query.month || new Date().toISOString().slice(0, 7));
+  const { start, end } = monthBounds(month);
+
+  const client = await prisma.client.findFirst({
+    where: { id: clientId, organizationId: org.id }
+  });
+  const clientName = client?.fullName ?? clientId.slice(0, 8);
+
+  const events = await prisma.mealServiceEvent.findMany({
+    where: {
+      organizationId: org.id,
+      clientId,
+      servedAt: { gte: start, lte: end }
+    },
+    include: {
+      sku: true,
+      mealSchedule: true,
+      finalLabelSnapshot: true,
+      lotConsumptions: {
+        include: {
+          recipeLine: { include: { ingredient: true } },
+          inventoryLot: { include: { product: true } }
+        }
+      }
+    },
+    orderBy: { servedAt: "asc" }
+  });
+
+  const rows: Record<string, unknown>[] = [];
+  for (const e of events) {
+    const label = e.finalLabelSnapshot?.renderPayload as Record<string, unknown> | null;
+    const fda = (label?.roundedFda ?? {}) as Record<string, number>;
+
+    if (e.lotConsumptions.length > 0) {
+      for (const lc of e.lotConsumptions) {
+        rows.push({
+          Client: clientName,
+          Date: e.servedAt.toISOString().slice(0, 10),
+          Meal: e.sku.name,
+          "Meal Slot": e.mealSchedule.mealSlot,
+          Ingredient: lc.recipeLine.ingredient.name,
+          "Grams Served": Number(lc.gramsConsumed.toFixed(1)),
+          Calories: fda.calories ?? "",
+          "Protein (g)": fda.proteinG ?? "",
+          "Carbs (g)": fda.carbG ?? "",
+          "Fat (g)": fda.fatG ?? "",
+          "Fiber (g)": fda.fiberG ?? "",
+          "Sodium (mg)": fda.sodiumMg ?? "",
+          "Cholesterol (mg)": fda.cholesterolMg ?? "",
+        });
+      }
+    } else {
+      rows.push({
+        Client: clientName,
+        Date: e.servedAt.toISOString().slice(0, 10),
+        Meal: e.sku.name,
+        "Meal Slot": e.mealSchedule.mealSlot,
+        Ingredient: "",
+        "Grams Served": "",
+        Calories: fda.calories ?? "",
+        "Protein (g)": fda.proteinG ?? "",
+        "Carbs (g)": fda.carbG ?? "",
+        "Fat (g)": fda.fatG ?? "",
+        "Fiber (g)": fda.fiberG ?? "",
+        "Sodium (mg)": fda.sodiumMg ?? "",
+        "Cholesterol (mg)": fda.cholesterolMg ?? "",
+      });
+    }
+  }
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(rows);
+  XLSX.utils.book_append_sheet(wb, ws, "Calendar");
+  const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="numen-calendar-${month}.xlsx"`);
+  return res.send(buf);
+});
+
 v1Router.get("/meals/:serviceEventId", async (req, res) => {
   const { serviceEventId } = req.params;
   const event = await prisma.mealServiceEvent.findUnique({

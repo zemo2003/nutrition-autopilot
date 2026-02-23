@@ -362,6 +362,25 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
             </p>
           </div>
 
+          {payload.ingredientBreakdown?.length ? (
+            <div className="card">
+              <div className="card-header">
+                <h3>Recipe</h3>
+                <span className="badge badge-neutral">Per Serving</span>
+              </div>
+              {payload.ingredientBreakdown.map((ing, idx) => (
+                <div
+                  key={idx}
+                  className="nutrition-row"
+                  style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--text-sm)" }}
+                >
+                  <span>{ing.ingredientName}</span>
+                  <span className="val">{ing.gramsPerServing.toFixed(1)}g</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <div className="card">
             <div className="card-header">
               <h3>Allergens</h3>

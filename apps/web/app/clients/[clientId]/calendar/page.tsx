@@ -118,6 +118,15 @@ export default async function CalendarPage({
           </p>
         </div>
         <div className="page-header-actions">
+          {events.length > 0 && (
+            <a
+              href={`${API_BASE}/v1/clients/${clientId}/calendar/export?month=${month}`}
+              className="btn btn-outline"
+              download
+            >
+              Export XLSX
+            </a>
+          )}
           <Link href="/" className="btn btn-outline">Dashboard</Link>
         </div>
       </div>
