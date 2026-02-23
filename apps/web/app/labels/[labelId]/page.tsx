@@ -26,6 +26,10 @@ type LabelPayload = {
     sugarsG?: number;
     addedSugarsG?: number;
     proteinG?: number;
+    vitaminDMcg?: number;
+    calciumMg?: number;
+    ironMg?: number;
+    potassiumMg?: number;
   };
   ingredientDeclaration?: string;
   allergenStatement?: string;
