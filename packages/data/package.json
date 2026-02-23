@@ -10,6 +10,6 @@
     }
   },
   "dependencies": {
-    "@nutrition/contracts": "workspace:*"
+    "@nutrition/contracts": "0.1.0"
   }
 }
