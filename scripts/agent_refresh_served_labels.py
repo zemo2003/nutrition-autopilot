@@ -78,6 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--only-final-events", default="true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--offset", type=int, default=0)
     return parser.parse_args()
 
 
@@ -154,6 +155,7 @@ def fetch_events(
     month: str,
     only_final_events: bool,
     limit: int,
+    offset: int,
 ) -> List[Dict[str, Any]]:
     start_date, end_date = month_bounds(month)
     sql = """
@@ -181,6 +183,8 @@ def fetch_events(
     if only_final_events:
         sql += ' and mse."finalLabelSnapshotId" is not null'
     sql += ' order by mse."servedAt" asc'
+    if offset > 0:
+        sql += f" offset {int(offset)}"
     if limit > 0:
         sql += f" limit {int(limit)}"
 
@@ -825,6 +829,7 @@ def main() -> int:
                 month=args.month,
                 only_final_events=only_final_events,
                 limit=args.limit,
+                offset=args.offset,
             )
             summary["eventCount"] = len(events)
 
