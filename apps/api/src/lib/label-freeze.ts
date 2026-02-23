@@ -7,6 +7,7 @@ import {
   prisma
 } from "@nutrition/db";
 import { computeSkuLabel, type NutrientMap } from "@nutrition/nutrition-engine";
+import { servedAtFromSchedule } from "./served-time.js";
 
 const inferredEvidenceGrades = new Set<NutrientEvidenceGrade>([
   NutrientEvidenceGrade.INFERRED_FROM_INGREDIENT,
@@ -343,6 +344,7 @@ export async function freezeLabelFromScheduleDone(input: {
         clientId: schedule.clientId,
         skuId: schedule.skuId,
         mealScheduleId: schedule.id,
+        servedAt: servedAtFromSchedule(schedule.serviceDate, schedule.mealSlot),
         servedByUserId: input.servedByUserId,
         scheduleStatusAtService: ScheduleStatus.DONE,
         createdBy: "system"

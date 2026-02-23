@@ -832,7 +832,11 @@ def main() -> int:
                 try:
                     result = refresh_event(cur, event, created_by="agent")
                     summary["events"].append(result)
+                    # Keep transactions short to reduce connection timeout risk on hosted Postgres.
+                    if not args.dry_run:
+                        conn.commit()
                 except Exception as event_error:
+                    conn.rollback()
                     summary["errors"].append({"eventId": event["event_id"], "message": str(event_error)})
 
             if args.dry_run:
@@ -845,7 +849,10 @@ def main() -> int:
         print(json.dumps(summary, indent=2))
         return 0
     except Exception as exc:  # pragma: no cover - operational script
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         summary["errors"].append(str(exc))
         summary["finishedAt"] = datetime.now(timezone.utc).isoformat()
         print(json.dumps(summary, indent=2))
