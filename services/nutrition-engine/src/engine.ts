@@ -1,5 +1,16 @@
 import type { NutrientKey } from "@nutrition/contracts";
-import { roundCalories, roundCholesterolMg, roundFatLike, roundGeneralG, roundSodiumMg } from "./rounding.js";
+import {
+  roundCalories,
+  roundCholesterolMg,
+  roundFatLike,
+  roundGeneralG,
+  roundSodiumMg,
+  roundVitaminD,
+  roundCalcium,
+  roundIron,
+  roundPotassium
+} from "./rounding.js";
+import { calculatePercentDV, getDailyValue } from "./daily-values.js";
 import type { ConsumedLotInput, LabelComputationInput, LabelComputationResult, NutrientMap } from "./types.js";
 
 const majorAllergens = [
@@ -89,6 +100,7 @@ export function computeSkuLabel(input: LabelComputationInput): LabelComputationR
   }
 
   const roundedFda = {
+    // Macronutrients
     calories: roundCalories(perServing.kcal ?? 0),
     fatG: roundFatLike(perServing.fat_g ?? 0),
     satFatG: roundFatLike(perServing.sat_fat_g ?? 0),
@@ -99,14 +111,55 @@ export function computeSkuLabel(input: LabelComputationInput): LabelComputationR
     fiberG: roundGeneralG(perServing.fiber_g ?? 0),
     sugarsG: roundGeneralG(perServing.sugars_g ?? 0),
     addedSugarsG: roundGeneralG(perServing.added_sugars_g ?? 0),
-    proteinG: roundGeneralG(perServing.protein_g ?? 0)
+    proteinG: roundGeneralG(perServing.protein_g ?? 0),
+    // Micronutrients (FDA-rounded per 21 CFR 101.9(c)(8)(iv))
+    vitaminDMcg: roundVitaminD(perServing.vitamin_d_mcg ?? 0),
+    calciumMg: roundCalcium(perServing.calcium_mg ?? 0),
+    ironMg: roundIron(perServing.iron_mg ?? 0),
+    potassiumMg: roundPotassium(perServing.potassium_mg ?? 0)
   };
+
+  const servingWeightG = totalWeight / servings;
 
   const ingredientDeclaration = `Ingredients: ${input.lines
     .slice()
     .sort((a, b) => b.gramsPerServing - a.gramsPerServing)
     .map((l) => l.ingredientName)
     .join(", ")}`;
+
+  // Build ingredient breakdown with nutrient highlights
+  const ingredientBreakdown = input.lines.map((line) => {
+    // Find all consumed lots matching this recipe line
+    const matchingLots = input.consumedLots.filter((lot) => lot.recipeLineId === line.lineId);
+
+    // Aggregate nutrients for this ingredient
+    const ingredientNutrients: NutrientMap = {};
+    for (const lot of matchingLots) {
+      addScaledNutrients(ingredientNutrients, lot);
+    }
+
+    // Scale by servings to get per-serving values
+    const perServingNutrients: NutrientMap = {};
+    for (const key of Object.keys(ingredientNutrients) as NutrientKey[]) {
+      const value = ingredientNutrients[key];
+      if (typeof value !== "number") continue;
+      perServingNutrients[key] = value / servings;
+    }
+
+    const percentOfServing = servingWeightG > 0 ? (line.gramsPerServing / servingWeightG) * 100 : 0;
+
+    return {
+      ingredientName: line.ingredientName,
+      gramsPerServing: line.gramsPerServing,
+      percentOfServing,
+      nutrientHighlights: {
+        protein_g: perServingNutrients.protein_g ?? 0,
+        fat_g: perServingNutrients.fat_g ?? 0,
+        carb_g: perServingNutrients.carb_g ?? 0,
+        kcal: perServingNutrients.kcal ?? 0
+      }
+    };
+  }).sort((a, b) => b.gramsPerServing - a.gramsPerServing);
 
   const allergenSet = new Set<string>();
   for (const line of input.lines) {
@@ -122,8 +175,27 @@ export function computeSkuLabel(input: LabelComputationInput): LabelComputationR
         .join(", ")}`
     : "Contains: None of the 9 major allergens";
 
+  // BUG FIX 2: Calculate macroKcal from unrounded values vs compare to unrounded calories
+  // This detects data entry errors, not rounding artifacts
   const macroKcal = (perServing.protein_g ?? 0) * 4 + (perServing.carb_g ?? 0) * 4 + (perServing.fat_g ?? 0) * 9;
-  const delta = macroKcal - roundedFda.calories;
+  const rawCalories = perServing.kcal ?? 0;
+  const delta = macroKcal - rawCalories;
+
+  // BUG FIX 1: Use FDA Class I tolerance of ±20% (percentage-based)
+  const percentError = rawCalories > 0 ? Math.abs(delta / rawCalories) : (macroKcal > 0 ? 1 : 0);
+  const pass = percentError <= 0.20; // FDA Class I: ±20%
+
+  // BUG FIX 3: Calculate %DV for all nutrients that have FDA daily values
+  const percentDV: Partial<Record<NutrientKey, number>> = {};
+  for (const key of Object.keys(perServing) as NutrientKey[]) {
+    const value = perServing[key];
+    if (typeof value !== "number") continue;
+    const dv = getDailyValue(key);
+    if (dv !== undefined && dv > 0) {
+      percentDV[key] = calculatePercentDV(value, key);
+    }
+  }
+
   const evidenceSummary = {
     verifiedCount: input.evidenceSummary?.verifiedCount ?? 0,
     inferredCount: input.evidenceSummary?.inferredCount ?? 0,
@@ -134,16 +206,20 @@ export function computeSkuLabel(input: LabelComputationInput): LabelComputationR
   };
 
   return {
-    servingWeightG: totalWeight / servings,
+    servingWeightG,
     perServing,
     roundedFda,
+    percentDV,
     ingredientDeclaration,
+    ingredientBreakdown,
     allergenStatement,
     qa: {
       macroKcal,
+      rawCalories,
       labeledCalories: roundedFda.calories,
       delta,
-      pass: Math.abs(delta) <= 20
+      percentError,
+      pass
     },
     provisional: Boolean(input.provisional ?? evidenceSummary.provisional),
     evidenceSummary

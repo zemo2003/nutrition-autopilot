@@ -5,20 +5,36 @@ import {
   VerificationStatus,
   prisma
 } from "@nutrition/db";
+import { nutrientKeys, type NutrientKey } from "@nutrition/contracts";
+import { searchAndGetBestMatch } from "../lib/usda-client.js";
+import { validateFoodProduct, computeConsensus, type NutrientSource } from "@nutrition/nutrition-engine";
+import usdaFallbackData from "../../../packages/data/usda-fallbacks.json" assert { type: "json" };
 
+type FullNutrients = Partial<Record<NutrientKey, number>>;
+
+// Legacy types kept for OpenFoodFacts which still returns only 5 core nutrients
 const coreKeys = ["kcal", "protein_g", "carb_g", "fat_g", "sodium_mg"] as const;
 
 type CoreKey = (typeof coreKeys)[number];
 type CoreNutrients = Partial<Record<CoreKey, number>>;
 
+// ─── USDA Fallback (54 ingredients × 40 nutrients) ────────────────
+const usdaIngredients = (usdaFallbackData as any).ingredients as Record<string, {
+  fdcId: number;
+  description: string;
+  dataType: string;
+  category: string;
+  nutrients: Record<string, number>;
+}>;
+
 type AutofillResult = {
-  values: CoreNutrients;
+  values: Partial<Record<NutrientKey, number>>;
   sourceType: NutrientSourceType;
   sourceRef: string;
   confidence: number;
   evidenceGrade: NutrientEvidenceGrade;
   historicalException: boolean;
-  method: "openfoodfacts_upc" | "ingredient_fallback";
+  method: "openfoodfacts_upc" | "ingredient_fallback" | "usda_fdc";
 };
 
 function toNumber(input: unknown): number | null {
@@ -40,37 +56,21 @@ function normalizeText(input: string): string {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-const ingredientFallbackByKey: Record<string, CoreNutrients> = {
-  "ING-EGGS-WHOLE": { kcal: 143, protein_g: 12.6, carb_g: 1.1, fat_g: 9.5, sodium_mg: 142 },
-  "ING-COTTAGE-CHEESE-LOWFAT": { kcal: 82, protein_g: 11.1, carb_g: 3.4, fat_g: 2.3, sodium_mg: 364 },
-  "ING-GREEK-YOGURT-NONFAT": { kcal: 59, protein_g: 10.3, carb_g: 3.6, fat_g: 0.4, sodium_mg: 36 },
-  "ING-ROLLED-OATS-DRY": { kcal: 389, protein_g: 16.9, carb_g: 66.3, fat_g: 6.9, sodium_mg: 2 },
-  "ING-HONEY": { kcal: 304, protein_g: 0.3, carb_g: 82.4, fat_g: 0, sodium_mg: 4 },
-  "ING-BANANA": { kcal: 89, protein_g: 1.1, carb_g: 22.8, fat_g: 0.3, sodium_mg: 1 },
-  "ING-CHICKEN-BREAST-RAW": { kcal: 120, protein_g: 22.5, carb_g: 0, fat_g: 2.6, sodium_mg: 74 },
-  "ING-CHICKEN-BREAST-COOKED": { kcal: 165, protein_g: 31.0, carb_g: 0, fat_g: 3.6, sodium_mg: 74 },
-  "ING-GROUND-TURKEY-93-COOKED": { kcal: 182, protein_g: 23.4, carb_g: 0, fat_g: 9.2, sodium_mg: 72 },
-  "ING-GROUND-BEEF-95-RAW": { kcal: 137, protein_g: 21.4, carb_g: 0, fat_g: 5, sodium_mg: 66 },
-  "ING-LEAN-GROUND-BEEF-95-COOKED": { kcal: 173, protein_g: 26.1, carb_g: 0, fat_g: 7, sodium_mg: 76 },
-  "ING-COD-COOKED": { kcal: 105, protein_g: 23, carb_g: 0, fat_g: 0.9, sodium_mg: 78 },
-  "ING-OLIVE-OIL": { kcal: 884, protein_g: 0, carb_g: 0, fat_g: 100, sodium_mg: 2 },
-  "ING-WHITE-RICE-COOKED": { kcal: 130, protein_g: 2.4, carb_g: 28.7, fat_g: 0.3, sodium_mg: 1 },
-  "ING-PASTA-COOKED": { kcal: 158, protein_g: 5.8, carb_g: 30.9, fat_g: 0.9, sodium_mg: 1 },
-  "ING-PENNE-DRY": { kcal: 371, protein_g: 13, carb_g: 75, fat_g: 1.5, sodium_mg: 6 },
-  "ING-KIDNEY-BEANS-COOKED": { kcal: 127, protein_g: 8.7, carb_g: 22.8, fat_g: 0.5, sodium_mg: 250 },
-  "ING-BLACK-BEANS-COOKED": { kcal: 132, protein_g: 8.9, carb_g: 23.7, fat_g: 0.5, sodium_mg: 240 },
-  "ING-MILK": { kcal: 61, protein_g: 3.2, carb_g: 4.8, fat_g: 3.3, sodium_mg: 43 },
-  "ING-BAGEL-PLAIN": { kcal: 274, protein_g: 10.5, carb_g: 53, fat_g: 1.7, sodium_mg: 443 },
-  "ING-PEANUT-BUTTER": { kcal: 588, protein_g: 25, carb_g: 20, fat_g: 50, sodium_mg: 486 },
-  "ING-GRANOLA": { kcal: 471, protein_g: 10, carb_g: 64, fat_g: 20, sodium_mg: 230 },
-  "ING-TUNA-DRAINED": { kcal: 116, protein_g: 25.5, carb_g: 0, fat_g: 0.8, sodium_mg: 247 },
-  "ING-ROMA-TOMATO": { kcal: 18, protein_g: 0.9, carb_g: 3.9, fat_g: 0.2, sodium_mg: 5 },
-  "ING-ENGLISH-SEEDLESS-CUCUMBER": { kcal: 15, protein_g: 0.7, carb_g: 3.6, fat_g: 0.1, sodium_mg: 2 },
-  "ING-GATORADE-FROST": { kcal: 24, protein_g: 0, carb_g: 6.1, fat_g: 0, sodium_mg: 46 }
-};
+/**
+ * Look up full 40-nutrient profile from pre-built USDA fallback JSON (54 ingredients).
+ * Returns all nutrients per 100g, not just the 5 core.
+ */
+export function resolveFallbackNutrients(ingredientKey: string): FullNutrients | null {
+  const entry = usdaIngredients[ingredientKey];
+  if (!entry) return null;
+  return entry.nutrients as FullNutrients;
+}
 
+/** @deprecated Use resolveFallbackNutrients — kept for backward compat */
 export function resolveFallbackNutrientsForIngredientKey(ingredientKey: string): CoreNutrients | null {
-  return ingredientFallbackByKey[ingredientKey] ?? null;
+  const full = resolveFallbackNutrients(ingredientKey);
+  if (!full) return null;
+  return { kcal: full.kcal, protein_g: full.protein_g, carb_g: full.carb_g, fat_g: full.fat_g, sodium_mg: full.sodium_mg };
 }
 
 async function fetchOpenFoodFactsByUpc(upc: string): Promise<AutofillResult | null> {
@@ -120,51 +120,158 @@ async function fetchOpenFoodFactsByUpc(upc: string): Promise<AutofillResult | nu
   }
 }
 
-function fallbackByName(productName: string): CoreNutrients | null {
-  const normalized = normalizeText(productName);
-  if (normalized.includes("egg")) return ingredientFallbackByKey["ING-EGGS-WHOLE"] ?? null;
-  if (normalized.includes("greek yogurt")) return ingredientFallbackByKey["ING-GREEK-YOGURT-NONFAT"] ?? null;
-  if (normalized.includes("cottage cheese")) return ingredientFallbackByKey["ING-COTTAGE-CHEESE-LOWFAT"] ?? null;
-  if (normalized.includes("oat")) return ingredientFallbackByKey["ING-ROLLED-OATS-DRY"] ?? null;
-  if (normalized.includes("honey")) return ingredientFallbackByKey["ING-HONEY"] ?? null;
-  if (normalized.includes("banana")) return ingredientFallbackByKey["ING-BANANA"] ?? null;
-  if (normalized.includes("chicken")) return ingredientFallbackByKey["ING-CHICKEN-BREAST-RAW"] ?? null;
-  if (normalized.includes("turkey")) return ingredientFallbackByKey["ING-GROUND-TURKEY-93-COOKED"] ?? null;
-  if (normalized.includes("beef")) return ingredientFallbackByKey["ING-GROUND-BEEF-95-RAW"] ?? null;
-  if (normalized.includes("cod") || normalized.includes("fish")) return ingredientFallbackByKey["ING-COD-COOKED"] ?? null;
-  if (normalized.includes("olive oil")) return ingredientFallbackByKey["ING-OLIVE-OIL"] ?? null;
-  if (normalized.includes("rice")) return ingredientFallbackByKey["ING-WHITE-RICE-COOKED"] ?? null;
-  if (normalized.includes("penne") || normalized.includes("pasta")) return ingredientFallbackByKey["ING-PENNE-DRY"] ?? null;
-  if (normalized.includes("bean")) return ingredientFallbackByKey["ING-KIDNEY-BEANS-COOKED"] ?? null;
-  if (normalized.includes("tomato")) return ingredientFallbackByKey["ING-ROMA-TOMATO"] ?? null;
-  if (normalized.includes("cucumber")) return ingredientFallbackByKey["ING-ENGLISH-SEEDLESS-CUCUMBER"] ?? null;
-  if (normalized.includes("gatorade")) return ingredientFallbackByKey["ING-GATORADE-FROST"] ?? null;
+async function fetchUsdaFdc(productName: string): Promise<AutofillResult | null> {
+  try {
+    const result = await searchAndGetBestMatch(productName);
+    if (!result) return null;
+
+    // Check we got at least the 4 core macros
+    const corePresent = ["kcal", "protein_g", "carb_g", "fat_g"].filter(
+      (k) => typeof result.nutrients[k as NutrientKey] === "number"
+    ).length;
+    if (corePresent < 3) return null;
+
+    const isFoundation = result.dataType === "Foundation" || result.dataType === "SR Legacy";
+
+    return {
+      values: result.nutrients,
+      sourceType: NutrientSourceType.MANUFACTURER,
+      sourceRef: `usda-fdc:${result.fdcId}:${result.description}`,
+      confidence: isFoundation ? 0.95 : 0.82,
+      evidenceGrade: isFoundation ? NutrientEvidenceGrade.USDA_GENERIC : NutrientEvidenceGrade.USDA_BRANDED,
+      historicalException: false,
+      method: "usda_fdc"
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Name-based fuzzy match to USDA fallback. Returns full 40-nutrient profile.
+ * More specific matches checked first to avoid false positives (e.g., "coconut oil" before "oil").
+ */
+function fallbackByName(productName: string): { key: string; nutrients: FullNutrients } | null {
+  const n = normalizeText(productName);
+
+  // Compound phrases first (more specific)
+  if (n.includes("egg white"))        return lookup("ING-EGG-WHITES");
+  if (n.includes("greek yogurt"))     return lookup("ING-GREEK-YOGURT-NONFAT");
+  if (n.includes("cottage cheese"))   return lookup("ING-COTTAGE-CHEESE-LOWFAT");
+  if (n.includes("cream cheese"))     return lookup("ING-CREAM-CHEESE");
+  if (n.includes("cheddar"))          return lookup("ING-CHEDDAR-CHEESE");
+  if (n.includes("peanut butter"))    return lookup("ING-PEANUT-BUTTER");
+  if (n.includes("olive oil"))        return lookup("ING-OLIVE-OIL");
+  if (n.includes("coconut oil"))      return lookup("ING-COCONUT-OIL");
+  if (n.includes("sweet potato"))     return lookup("ING-SWEET-POTATO-COOKED");
+  if (n.includes("brown rice"))       return lookup("ING-BROWN-RICE-COOKED");
+  if (n.includes("whole wheat bread") || n.includes("wheat bread")) return lookup("ING-BREAD-WHOLE-WHEAT");
+  if (n.includes("bell pepper") || n.includes("red pepper")) return lookup("ING-BELL-PEPPER-RED");
+  if (n.includes("chia seed"))        return lookup("ING-CHIA-SEEDS");
+  if (n.includes("flax seed") || n.includes("flaxseed")) return lookup("ING-FLAX-SEEDS");
+  if (n.includes("black bean"))       return lookup("ING-BLACK-BEANS-COOKED");
+  if (n.includes("kidney bean"))      return lookup("ING-KIDNEY-BEANS-COOKED");
+  if (n.includes("ground turkey"))    return lookup("ING-GROUND-TURKEY-93-COOKED");
+  if (n.includes("ground beef"))      return lookup("ING-GROUND-BEEF-95-RAW");
+  if (n.includes("chicken thigh"))    return lookup("ING-CHICKEN-THIGH-RAW");
+  if (n.includes("chicken breast") && n.includes("cooked")) return lookup("ING-CHICKEN-BREAST-COOKED");
+  if (n.includes("chicken breast"))   return lookup("ING-CHICKEN-BREAST-RAW");
+
+  // Single-word matches
+  if (n.includes("egg"))              return lookup("ING-EGGS-WHOLE");
+  if (n.includes("chicken"))          return lookup("ING-CHICKEN-BREAST-RAW");
+  if (n.includes("turkey"))           return lookup("ING-GROUND-TURKEY-93-COOKED");
+  if (n.includes("beef"))             return lookup("ING-GROUND-BEEF-95-RAW");
+  if (n.includes("salmon"))           return lookup("ING-SALMON-ATLANTIC-RAW");
+  if (n.includes("cod") || n.includes("fish")) return lookup("ING-COD-COOKED");
+  if (n.includes("tuna"))             return lookup("ING-TUNA-DRAINED");
+  if (n.includes("shrimp"))           return lookup("ING-SHRIMP-COOKED");
+  if (n.includes("tofu"))             return lookup("ING-TOFU-FIRM");
+  if (n.includes("milk"))             return lookup("ING-MILK");
+  if (n.includes("yogurt"))           return lookup("ING-GREEK-YOGURT-NONFAT");
+  if (n.includes("butter"))           return lookup("ING-BUTTER");
+  if (n.includes("oat"))              return lookup("ING-ROLLED-OATS-DRY");
+  if (n.includes("quinoa"))           return lookup("ING-QUINOA-COOKED");
+  if (n.includes("rice"))             return lookup("ING-WHITE-RICE-COOKED");
+  if (n.includes("penne") || n.includes("pasta") || n.includes("spaghetti")) return lookup("ING-PENNE-DRY");
+  if (n.includes("bagel"))            return lookup("ING-BAGEL-PLAIN");
+  if (n.includes("bread"))            return lookup("ING-BREAD-WHOLE-WHEAT");
+  if (n.includes("chickpea") || n.includes("garbanzo")) return lookup("ING-CHICKPEAS-COOKED");
+  if (n.includes("lentil"))           return lookup("ING-LENTILS-COOKED");
+  if (n.includes("bean"))             return lookup("ING-KIDNEY-BEANS-COOKED");
+  if (n.includes("broccoli"))         return lookup("ING-BROCCOLI-RAW");
+  if (n.includes("spinach"))          return lookup("ING-SPINACH-RAW");
+  if (n.includes("kale"))             return lookup("ING-KALE-RAW");
+  if (n.includes("carrot"))           return lookup("ING-CARROT-RAW");
+  if (n.includes("tomato"))           return lookup("ING-ROMA-TOMATO");
+  if (n.includes("cucumber"))         return lookup("ING-ENGLISH-SEEDLESS-CUCUMBER");
+  if (n.includes("banana"))           return lookup("ING-BANANA");
+  if (n.includes("blueberr"))         return lookup("ING-BLUEBERRY");
+  if (n.includes("strawberr"))        return lookup("ING-STRAWBERRY");
+  if (n.includes("apple"))            return lookup("ING-APPLE");
+  if (n.includes("avocado"))          return lookup("ING-AVOCADO");
+  if (n.includes("almond"))           return lookup("ING-ALMONDS");
+  if (n.includes("walnut"))           return lookup("ING-WALNUTS");
+  if (n.includes("honey"))            return lookup("ING-HONEY");
+  if (n.includes("granola"))          return lookup("ING-GRANOLA");
+  if (n.includes("gatorade"))         return lookup("ING-GATORADE-FROST");
+
   return null;
 }
 
+function lookup(key: string): { key: string; nutrients: FullNutrients } | null {
+  const entry = usdaIngredients[key];
+  if (!entry) return null;
+  return { key, nutrients: entry.nutrients as FullNutrients };
+}
+
 async function resolveNutrients(product: { upc: string | null; name: string; ingredient: { canonicalKey: string } }): Promise<AutofillResult | null> {
+  // 1. OpenFoodFacts UPC lookup
   const upc = normalizedUpc(product.upc);
   if (upc) {
     const fromOff = await fetchOpenFoodFactsByUpc(upc);
     if (fromOff) return fromOff;
   }
 
-  const fallback = resolveFallbackNutrientsForIngredientKey(product.ingredient.canonicalKey) ?? fallbackByName(product.name);
-  if (!fallback) return null;
-  return {
-    values: fallback,
-    sourceType: NutrientSourceType.DERIVED,
-    sourceRef: `ingredient-fallback:${product.ingredient.canonicalKey}`,
-    confidence: 0.55,
-    evidenceGrade: NutrientEvidenceGrade.INFERRED_FROM_INGREDIENT,
-    historicalException: false,
-    method: "ingredient_fallback"
-  };
+  // 2. USDA FDC live search (returns all 40 nutrients)
+  const fromUsda = await fetchUsdaFdc(product.name);
+  if (fromUsda) return fromUsda;
+
+  // 3. USDA pre-built fallback (54 ingredients × 40 nutrients)
+  const fullFallback = resolveFallbackNutrients(product.ingredient.canonicalKey);
+  if (fullFallback) {
+    const entry = usdaIngredients[product.ingredient.canonicalKey];
+    return {
+      values: fullFallback,
+      sourceType: NutrientSourceType.DERIVED,
+      sourceRef: `usda-fallback-json:${product.ingredient.canonicalKey}:fdc-${entry?.fdcId ?? "unknown"}`,
+      confidence: 0.85, // Higher than old fallback — sourced from verified USDA data
+      evidenceGrade: NutrientEvidenceGrade.USDA_GENERIC,
+      historicalException: false,
+      method: "ingredient_fallback"
+    };
+  }
+
+  // 4. Name-based fuzzy match against USDA fallback
+  const nameMatch = fallbackByName(product.name);
+  if (nameMatch) {
+    return {
+      values: nameMatch.nutrients,
+      sourceType: NutrientSourceType.DERIVED,
+      sourceRef: `usda-fallback-name:${nameMatch.key}`,
+      confidence: 0.70,
+      evidenceGrade: NutrientEvidenceGrade.INFERRED_FROM_INGREDIENT,
+      historicalException: false,
+      method: "ingredient_fallback"
+    };
+  }
+
+  return null;
 }
 
 async function upsertNutrientsForProduct(input: {
   productId: string;
-  values: CoreNutrients;
+  values: Partial<Record<NutrientKey, number>>;
   sourceType: NutrientSourceType;
   sourceRef: string;
   confidence: number;
@@ -172,12 +279,13 @@ async function upsertNutrientsForProduct(input: {
   historicalException: boolean;
   retrievalRunId: string;
 }) {
+  const keysToUpsert = Object.keys(input.values) as NutrientKey[];
   const defs = await prisma.nutrientDefinition.findMany({
-    where: { key: { in: coreKeys as unknown as string[] } }
+    where: { key: { in: keysToUpsert } }
   });
   const defByKey = new Map(defs.map((d) => [d.key, d]));
 
-  for (const key of coreKeys) {
+  for (const key of keysToUpsert) {
     const value = input.values[key];
     if (typeof value !== "number" || !Number.isFinite(value)) continue;
     const def = defByKey.get(key);
@@ -256,6 +364,90 @@ async function ensureVerificationTask(input: {
   });
 }
 
+/**
+ * Attempt to gather multiple data sources for consensus scoring.
+ * Returns the best result after running plausibility + optional consensus.
+ */
+async function resolveWithConsensus(
+  product: { upc: string | null; name: string; ingredient: { canonicalKey: string } }
+): Promise<AutofillResult | null> {
+  const sources: Array<{ result: AutofillResult; sourceType: NutrientSource["sourceType"] }> = [];
+
+  // Gather all available sources (don't short-circuit)
+  const upc = normalizedUpc(product.upc);
+  if (upc) {
+    const fromOff = await fetchOpenFoodFactsByUpc(upc);
+    if (fromOff) sources.push({ result: fromOff, sourceType: "OPENFOODFACTS" });
+  }
+
+  const fromUsda = await fetchUsdaFdc(product.name);
+  if (fromUsda) sources.push({ result: fromUsda, sourceType: fromUsda.confidence >= 0.9 ? "USDA_FOUNDATION" : "USDA_BRANDED" });
+
+  const fullFallback = resolveFallbackNutrients(product.ingredient.canonicalKey);
+  if (fullFallback) {
+    const entry = usdaIngredients[product.ingredient.canonicalKey];
+    sources.push({
+      result: {
+        values: fullFallback,
+        sourceType: NutrientSourceType.DERIVED,
+        sourceRef: `usda-fallback-json:${product.ingredient.canonicalKey}:fdc-${entry?.fdcId ?? "unknown"}`,
+        confidence: 0.85,
+        evidenceGrade: NutrientEvidenceGrade.USDA_GENERIC,
+        historicalException: false,
+        method: "ingredient_fallback"
+      },
+      sourceType: "USDA_SR_LEGACY"
+    });
+  }
+
+  if (sources.length === 0) {
+    // Last resort: name-based match
+    const nameMatch = fallbackByName(product.name);
+    if (!nameMatch) return null;
+    return {
+      values: nameMatch.nutrients,
+      sourceType: NutrientSourceType.DERIVED,
+      sourceRef: `usda-fallback-name:${nameMatch.key}`,
+      confidence: 0.70,
+      evidenceGrade: NutrientEvidenceGrade.INFERRED_FROM_INGREDIENT,
+      historicalException: false,
+      method: "ingredient_fallback"
+    };
+  }
+
+  if (sources.length === 1) {
+    return sources[0]!.result;
+  }
+
+  // Multiple sources: run consensus
+  const nutrientSources: NutrientSource[] = sources.map((s, i) => ({
+    sourceId: `source-${i}-${s.result.method}`,
+    sourceType: s.sourceType,
+    nutrients: s.result.values,
+    baseConfidence: s.result.confidence
+  }));
+
+  const consensus = computeConsensus(nutrientSources);
+
+  // Use the primary source's metadata but with consensus values
+  const primaryIdx = sources.findIndex((s, i) => `source-${i}-${s.result.method}` === consensus.primarySourceId);
+  const primary = sources[primaryIdx >= 0 ? primaryIdx : 0]!;
+
+  // Run plausibility on consensus values
+  const issues = validateFoodProduct(consensus.consensusValues, product.name);
+  const hasErrors = issues.some((i) => i.severity === "ERROR");
+
+  return {
+    values: hasErrors ? primary.result.values : consensus.consensusValues,
+    sourceType: primary.result.sourceType,
+    sourceRef: `consensus:${sources.map((s) => s.result.method).join("+")}|${primary.result.sourceRef}`,
+    confidence: hasErrors ? primary.result.confidence * 0.7 : consensus.overallConfidence,
+    evidenceGrade: primary.result.evidenceGrade,
+    historicalException: false,
+    method: primary.result.method
+  };
+}
+
 export async function runNutrientAutofillSweep() {
   const retrievalRunId = `worker-${new Date().toISOString()}`;
   const products = await prisma.productCatalog.findMany({
@@ -279,7 +471,8 @@ export async function runNutrientAutofillSweep() {
     const missingCore = ["kcal", "protein_g", "carb_g", "fat_g"].filter((k) => !present.has(k));
     if (!missingCore.length) continue;
 
-    const resolved = await resolveNutrients(product);
+    // Use consensus-based resolution when multiple sources available
+    const resolved = await resolveWithConsensus(product);
     if (!resolved) {
       await ensureVerificationTask({
         organizationId: product.organizationId,
@@ -287,30 +480,43 @@ export async function runNutrientAutofillSweep() {
         productName: product.name,
         severity: "CRITICAL",
         title: `Missing nutrient profile: ${product.name}`,
-        description: "Autofill agent could not resolve nutrients from UPC or fallback map.",
+        description: "Autofill agent could not resolve nutrients from UPC, USDA, or fallback map.",
         payload: { productId: product.id, productName: product.name, missingCore }
       });
       continue;
     }
+
+    // Run plausibility check and note issues
+    const plausibilityIssues = validateFoodProduct(resolved.values, product.name);
+    const plausibilityErrors = plausibilityIssues.filter((i) => i.severity === "ERROR");
 
     await upsertNutrientsForProduct({
       productId: product.id,
       values: resolved.values,
       sourceType: resolved.sourceType,
       sourceRef: resolved.sourceRef,
-      confidence: resolved.confidence,
+      confidence: plausibilityErrors.length > 0 ? Math.min(resolved.confidence, 0.4) : resolved.confidence,
       evidenceGrade: resolved.evidenceGrade,
       historicalException: resolved.historicalException,
       retrievalRunId
     });
 
+    // Create verification task — severity based on confidence + plausibility
+    const severity = plausibilityErrors.length > 0
+      ? "CRITICAL" as const
+      : resolved.confidence >= 0.8 ? "MEDIUM" as const : "HIGH" as const;
+
     await ensureVerificationTask({
       organizationId: product.organizationId,
       productId: product.id,
       productName: product.name,
-      severity: resolved.confidence >= 0.8 ? "MEDIUM" : "HIGH",
-      title: `Review autofilled nutrients: ${product.name}`,
-      description: "Autofill agent inserted core nutrients. Human review required before final trust.",
+      severity,
+      title: plausibilityErrors.length > 0
+        ? `Plausibility issues in autofilled nutrients: ${product.name}`
+        : `Review autofilled nutrients: ${product.name}`,
+      description: plausibilityErrors.length > 0
+        ? `Autofill found plausibility errors: ${plausibilityErrors.map((e) => e.message).join("; ")}`
+        : "Autofill agent inserted nutrients. Human review required before final trust.",
       payload: {
         productId: product.id,
         productName: product.name,
@@ -318,7 +524,8 @@ export async function runNutrientAutofillSweep() {
         sourceRef: resolved.sourceRef,
         confidence: resolved.confidence,
         values: resolved.values,
-        missingCoreBefore: missingCore
+        missingCoreBefore: missingCore,
+        plausibilityIssues: plausibilityIssues.length > 0 ? plausibilityIssues.slice(0, 10) : undefined
       }
     });
   }

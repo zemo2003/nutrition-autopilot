@@ -39,6 +39,7 @@ export type LabelComputationResult = {
   servingWeightG: number;
   perServing: NutrientMap;
   roundedFda: {
+    // Existing macro fields (keep for backward compat)
     calories: number;
     fatG: number;
     satFatG: number;
@@ -50,13 +51,27 @@ export type LabelComputationResult = {
     sugarsG: number;
     addedSugarsG: number;
     proteinG: number;
+    // NEW: All micronutrients rounded per FDA
+    vitaminDMcg: number;
+    calciumMg: number;
+    ironMg: number;
+    potassiumMg: number;
   };
+  percentDV: Partial<Record<NutrientKey, number>>;  // NEW
   ingredientDeclaration: string;
+  ingredientBreakdown: Array<{
+    ingredientName: string;
+    gramsPerServing: number;
+    percentOfServing: number;
+    nutrientHighlights: { protein_g: number; fat_g: number; carb_g: number; kcal: number };
+  }>;
   allergenStatement: string;
   qa: {
     macroKcal: number;
+    rawCalories: number;        // NEW: unrounded for comparison
     labeledCalories: number;
     delta: number;
+    percentError: number;       // NEW
     pass: boolean;
   };
   provisional: boolean;

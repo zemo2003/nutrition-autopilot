@@ -39,6 +39,26 @@ type LabelPayload = {
   nutrientsPerServing?: Record<string, number>;
   nutrientsPer100g?: Record<string, number>;
   nutrientsTotal?: Record<string, number>;
+  ingredientBreakdown?: Array<{
+    ingredientName: string;
+    gramsPerServing: number;
+    percentOfServing: number;
+    nutrientHighlights: { protein_g: number; fat_g: number; carb_g: number; kcal: number };
+  }>;
+  plausibility?: {
+    valid?: boolean;
+    errorCount?: number;
+    warningCount?: number;
+    issues?: Array<{
+      nutrientKey: string;
+      value: number;
+      rule: string;
+      severity: "ERROR" | "WARNING";
+      message: string;
+      suggestedRange?: { min: number; max: number };
+    }>;
+  };
+  percentDV?: Record<string, number>;
 };
 
 type LineageNode = {
@@ -196,6 +216,7 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
       : null;
   const reasonCodes = payload.reasonCodes ?? [];
   const r = payload.roundedFda ?? {};
+  const dv = payload.percentDV ?? {};
   const nutrientDataset = resolveNutrientDataset(payload);
   const nutrients = nutrientDataset ? orderedNutrients(nutrientDataset.values) : [];
 
@@ -280,49 +301,70 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
                     <span>Serving Size</span>
                     <span className="val">{payload.servingWeightG?.toFixed(1) ?? "n/a"} g</span>
                   </div>
-                  <div className="nutrition-row calories">
+                  <div className="nutrition-row calories" style={{ display: "flex", justifyContent: "space-between" }}>
                     <span>Calories</span>
                     <span className="val">{r.calories ?? 0}</span>
                   </div>
-                  <div className="nutrition-row major">
-                    <span>Total Fat</span>
-                    <span className="val">{r.fatG ?? 0}g</span>
+                  <div style={{ textAlign: "right", fontSize: "var(--text-xs)", fontWeight: 600, padding: "2px var(--sp-3)", borderBottom: "1px solid var(--line-soft)", opacity: 0.6 }}>% Daily Value*</div>
+                  <div className="nutrition-row major" style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span><b>Total Fat</b> {r.fatG ?? 0}g</span>
+                    <span className="val">{dv.fat_g != null ? `${Math.round(dv.fat_g)}%` : ""}</span>
                   </div>
-                  <div className="nutrition-row sub">
-                    <span>Saturated Fat</span>
-                    <span className="val">{r.satFatG ?? 0}g</span>
+                  <div className="nutrition-row sub" style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span>Saturated Fat {r.satFatG ?? 0}g</span>
+                    <span className="val">{dv.sat_fat_g != null ? `${Math.round(dv.sat_fat_g)}%` : ""}</span>
                   </div>
-                  <div className="nutrition-row sub">
-                    <span>Trans Fat</span>
-                    <span className="val">{r.transFatG ?? 0}g</span>
+                  <div className="nutrition-row sub" style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span><i>Trans</i> Fat {r.transFatG ?? 0}g</span>
+                    <span className="val"></span>
                   </div>
-                  <div className="nutrition-row major">
-                    <span>Cholesterol</span>
-                    <span className="val">{r.cholesterolMg ?? 0}mg</span>
+                  <div className="nutrition-row major" style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span><b>Cholesterol</b> {r.cholesterolMg ?? 0}mg</span>
+                    <span className="val">{dv.cholesterol_mg != null ? `${Math.round(dv.cholesterol_mg)}%` : ""}</span>
                   </div>
-                  <div className="nutrition-row major">
-                    <span>Sodium</span>
-                    <span className="val">{r.sodiumMg ?? 0}mg</span>
+                  <div className="nutrition-row major" style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span><b>Sodium</b> {r.sodiumMg ?? 0}mg</span>
+                    <span className="val">{dv.sodium_mg != null ? `${Math.round(dv.sodium_mg)}%` : ""}</span>
                   </div>
-                  <div className="nutrition-row major">
-                    <span>Total Carbohydrate</span>
-                    <span className="val">{r.carbG ?? 0}g</span>
+                  <div className="nutrition-row major" style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span><b>Total Carbohydrate</b> {r.carbG ?? 0}g</span>
+                    <span className="val">{dv.carb_g != null ? `${Math.round(dv.carb_g)}%` : ""}</span>
                   </div>
-                  <div className="nutrition-row sub">
-                    <span>Dietary Fiber</span>
-                    <span className="val">{r.fiberG ?? 0}g</span>
+                  <div className="nutrition-row sub" style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span>Dietary Fiber {r.fiberG ?? 0}g</span>
+                    <span className="val">{dv.fiber_g != null ? `${Math.round(dv.fiber_g)}%` : ""}</span>
                   </div>
-                  <div className="nutrition-row sub">
-                    <span>Total Sugars</span>
-                    <span className="val">{r.sugarsG ?? 0}g</span>
+                  <div className="nutrition-row sub" style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span>Total Sugars {r.sugarsG ?? 0}g</span>
+                    <span className="val"></span>
                   </div>
-                  <div className="nutrition-row sub">
-                    <span>Added Sugars</span>
-                    <span className="val">{r.addedSugarsG ?? 0}g</span>
+                  <div className="nutrition-row sub" style={{ display: "flex", justifyContent: "space-between", paddingLeft: "var(--sp-6)" }}>
+                    <span>Includes {r.addedSugarsG ?? 0}g Added Sugars</span>
+                    <span className="val">{dv.added_sugars_g != null ? `${Math.round(dv.added_sugars_g)}%` : ""}</span>
                   </div>
-                  <div className="nutrition-row major">
-                    <span>Protein</span>
-                    <span className="val">{r.proteinG ?? 0}g</span>
+                  <div className="nutrition-row major" style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span><b>Protein</b> {r.proteinG ?? 0}g</span>
+                    <span className="val">{dv.protein_g != null ? `${Math.round(dv.protein_g)}%` : ""}</span>
+                  </div>
+                  <div style={{ borderTop: "8px solid currentColor", margin: "0 var(--sp-3)" }}></div>
+                  <div className="nutrition-row" style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span>Vitamin D {r.vitaminDMcg ?? (payload.perServing?.vitamin_d_mcg ?? 0).toFixed(1)}mcg</span>
+                    <span className="val">{dv.vitamin_d_mcg != null ? `${Math.round(dv.vitamin_d_mcg)}%` : ""}</span>
+                  </div>
+                  <div className="nutrition-row" style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span>Calcium {r.calciumMg ?? Math.round(payload.perServing?.calcium_mg ?? 0)}mg</span>
+                    <span className="val">{dv.calcium_mg != null ? `${Math.round(dv.calcium_mg)}%` : ""}</span>
+                  </div>
+                  <div className="nutrition-row" style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span>Iron {r.ironMg ?? (payload.perServing?.iron_mg ?? 0).toFixed(1)}mg</span>
+                    <span className="val">{dv.iron_mg != null ? `${Math.round(dv.iron_mg)}%` : ""}</span>
+                  </div>
+                  <div className="nutrition-row" style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span>Potassium {r.potassiumMg ?? Math.round(payload.perServing?.potassium_mg ?? 0)}mg</span>
+                    <span className="val">{dv.potassium_mg != null ? `${Math.round(dv.potassium_mg)}%` : ""}</span>
+                  </div>
+                  <div style={{ padding: "var(--sp-2) var(--sp-3)", fontSize: 10, lineHeight: 1.4, opacity: 0.55, borderTop: "1px solid var(--line-soft)" }}>
+                    * The % Daily Value (DV) tells you how much a nutrient in a serving of food contributes to a daily diet. 2,000 calories a day is used for general nutrition advice.
                   </div>
                 </>
               ) : nutrientDataset ? (
@@ -405,6 +447,44 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
             )}
           </div>
 
+          {payload.plausibility ? (
+            <div className="card">
+              <div className="card-header">
+                <h3>Plausibility Check</h3>
+                {payload.plausibility.valid
+                  ? <span className="badge badge-success">Valid</span>
+                  : <span className="badge badge-danger">{payload.plausibility.errorCount ?? 0} Error{(payload.plausibility.errorCount ?? 0) !== 1 ? "s" : ""}</span>
+                }
+              </div>
+              <div className="qa-block">
+                <div className="qa-metric">
+                  <div className="qa-metric-value">{payload.plausibility.errorCount ?? 0}</div>
+                  <div className="qa-metric-label">Errors</div>
+                </div>
+                <div className="qa-metric">
+                  <div className="qa-metric-value">{payload.plausibility.warningCount ?? 0}</div>
+                  <div className="qa-metric-label">Warnings</div>
+                </div>
+              </div>
+              {payload.plausibility.issues?.length ? (
+                <div style={{ padding: "0 var(--sp-4) var(--sp-4)", maxHeight: 200, overflow: "auto" }}>
+                  {payload.plausibility.issues.map((issue, idx) => (
+                    <div key={idx} style={{
+                      padding: "var(--sp-2) var(--sp-3)",
+                      marginBottom: 4,
+                      borderRadius: 6,
+                      fontSize: "var(--text-sm)",
+                      backgroundColor: issue.severity === "ERROR" ? "rgba(239,68,68,0.08)" : "rgba(245,158,11,0.08)",
+                      borderLeft: `3px solid ${issue.severity === "ERROR" ? "var(--danger)" : "var(--warning, #f59e0b)"}`
+                    }}>
+                      {issue.message}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
           <div className="card">
             <div className="card-header">
               <h3>Evidence Summary</h3>
@@ -435,6 +515,93 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
           </div>
         </section>
       </div>
+
+      {payload.ingredientBreakdown?.length ? (
+        <section className="section mt-8">
+          <div className="card">
+            <div className="card-header">
+              <h3>Ingredient Breakdown</h3>
+              <span className="badge badge-neutral">Per Serving</span>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-sm)" }}>
+                <thead>
+                  <tr style={{ borderBottom: "2px solid var(--line-soft)", textAlign: "left" }}>
+                    <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600 }}>Ingredient</th>
+                    <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600, textAlign: "right" }}>Grams</th>
+                    <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600, textAlign: "right" }}>% of Serving</th>
+                    <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600, textAlign: "right" }}>Calories</th>
+                    <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600, textAlign: "right" }}>Protein</th>
+                    <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600, textAlign: "right" }}>Carbs</th>
+                    <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600, textAlign: "right" }}>Fat</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {payload.ingredientBreakdown.map((ing, idx) => (
+                    <tr key={idx} style={{ borderBottom: "1px solid var(--line-soft)" }}>
+                      <td style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 500 }}>{ing.ingredientName}</td>
+                      <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>{ing.gramsPerServing.toFixed(1)}g</td>
+                      <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>{ing.percentOfServing.toFixed(1)}%</td>
+                      <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>{ing.nutrientHighlights.kcal.toFixed(0)} kcal</td>
+                      <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>{ing.nutrientHighlights.protein_g.toFixed(1)}g</td>
+                      <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>{ing.nutrientHighlights.carb_g.toFixed(1)}g</td>
+                      <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>{ing.nutrientHighlights.fat_g.toFixed(1)}g</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ borderTop: "2px solid var(--line-soft)", fontWeight: 600 }}>
+                    <td style={{ padding: "var(--sp-3) var(--sp-4)" }}>Total</td>
+                    <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>
+                      {payload.ingredientBreakdown.reduce((s, i) => s + i.gramsPerServing, 0).toFixed(1)}g
+                    </td>
+                    <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>100.0%</td>
+                    <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>
+                      {payload.ingredientBreakdown.reduce((s, i) => s + i.nutrientHighlights.kcal, 0).toFixed(0)} kcal
+                    </td>
+                    <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>
+                      {payload.ingredientBreakdown.reduce((s, i) => s + i.nutrientHighlights.protein_g, 0).toFixed(1)}g
+                    </td>
+                    <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>
+                      {payload.ingredientBreakdown.reduce((s, i) => s + i.nutrientHighlights.carb_g, 0).toFixed(1)}g
+                    </td>
+                    <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>
+                      {payload.ingredientBreakdown.reduce((s, i) => s + i.nutrientHighlights.fat_g, 0).toFixed(1)}g
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+            <div style={{ padding: "var(--sp-4)", display: "flex", gap: 4, height: 32, borderRadius: 8, overflow: "hidden" }}>
+              {payload.ingredientBreakdown.map((ing, idx) => {
+                const colors = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"];
+                return (
+                  <div
+                    key={idx}
+                    style={{
+                      flex: ing.percentOfServing,
+                      backgroundColor: colors[idx % colors.length],
+                      borderRadius: 4,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: "white",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      overflow: "hidden",
+                      whiteSpace: "nowrap",
+                      padding: "0 4px"
+                    }}
+                    title={`${ing.ingredientName}: ${ing.gramsPerServing.toFixed(1)}g (${ing.percentOfServing.toFixed(1)}%)`}
+                  >
+                    {ing.percentOfServing > 10 ? ing.ingredientName : ""}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="section mt-8">
         <div className="card">

@@ -6,7 +6,7 @@ import {
   VerificationStatus,
   prisma
 } from "@nutrition/db";
-import { computeSkuLabel, type NutrientMap } from "@nutrition/nutrition-engine";
+import { computeSkuLabel, type NutrientMap, validateFoodProduct, type PlausibilityIssue } from "@nutrition/nutrition-engine";
 import { servedAtFromSchedule } from "./served-time.js";
 
 const inferredEvidenceGrades = new Set<NutrientEvidenceGrade>([
@@ -15,6 +15,8 @@ const inferredEvidenceGrades = new Set<NutrientEvidenceGrade>([
 ]);
 
 const reasonCodeOrder = [
+  "PLAUSIBILITY_ERROR",
+  "PLAUSIBILITY_WARNING",
   "UNVERIFIED_SOURCE",
   "HISTORICAL_EXCEPTION",
   "SYNTHETIC_LOT_USAGE"
@@ -500,9 +502,29 @@ export async function freezeLabelFromScheduleDone(input: {
       }
     });
 
+    // Plausibility gate: validate the computed per-serving nutrients
+    const plausibilityIssues = validateFoodProduct(label.perServing, schedule.sku.name);
+
+    const plausibilityErrors = plausibilityIssues.filter(
+      (i: PlausibilityIssue) => i.severity === "ERROR"
+    );
+    const plausibilityWarnings = plausibilityIssues.filter(
+      (i: PlausibilityIssue) => i.severity === "WARNING"
+    );
+
     const skuLabelPayload = {
       ...label,
-      reasonCodes: skuEvidence.reasonCodes,
+      reasonCodes: [
+        ...skuEvidence.reasonCodes,
+        ...(plausibilityErrors.length > 0 ? ["PLAUSIBILITY_ERROR" as const] : []),
+        ...(plausibilityWarnings.length > 0 ? ["PLAUSIBILITY_WARNING" as const] : [])
+      ],
+      plausibility: {
+        valid: plausibilityErrors.length === 0,
+        errorCount: plausibilityErrors.length,
+        warningCount: plausibilityWarnings.length,
+        issues: plausibilityIssues.slice(0, 10) // cap at 10 for payload size
+      },
       evidenceSummary: {
         ...label.evidenceSummary,
         sourceRefs: skuEvidence.sourceRefs,
@@ -522,6 +544,27 @@ export async function freezeLabelFromScheduleDone(input: {
         version: await nextLabelVersion(tx, schedule.organizationId, "SKU", schedule.skuId)
       }
     });
+
+    // Create verification tasks for plausibility errors
+    if (plausibilityErrors.length > 0) {
+      await tx.verificationTask.create({
+        data: {
+          organizationId: schedule.organizationId,
+          taskType: "CONSISTENCY",
+          severity: "CRITICAL",
+          status: "OPEN",
+          title: `Plausibility errors: ${schedule.sku.name}`,
+          description: plausibilityErrors.map((e: PlausibilityIssue) => e.message).join("; "),
+          payload: {
+            labelSnapshotId: skuLabel.id,
+            skuId: schedule.skuId,
+            skuName: schedule.sku.name,
+            issues: plausibilityErrors
+          },
+          createdBy: "system"
+        }
+      });
+    }
 
     const ingredientGroups = groupConsumedLotsByIngredient(consumedLots);
 
