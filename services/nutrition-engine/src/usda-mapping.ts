@@ -323,56 +323,32 @@ export const USDA_NUTRIENT_MAP: UsdaNutrientMapping[] = [
   },
 ];
 
-/**
- * Create a lookup map for quick access by nutrient key
- */
-export const USDA_NUTRIENT_MAP_BY_KEY: Map<NutrientKey, UsdaNutrientMapping> =
+const USDA_NUTRIENT_MAP_BY_KEY: Map<NutrientKey, UsdaNutrientMapping> =
   new Map(USDA_NUTRIENT_MAP.map((mapping) => [mapping.nutrientKey, mapping]));
 
-/**
- * Create a reverse lookup map from USDA number to nutrient key
- */
-export const USDA_NUMBER_TO_NUTRIENT_KEY: Map<number, NutrientKey> = new Map(
+const USDA_NUMBER_TO_NUTRIENT_KEY: Map<number, NutrientKey> = new Map(
   USDA_NUTRIENT_MAP.map((mapping) => [mapping.usdaNumber, mapping.nutrientKey])
 );
 
-/**
- * Get the USDA nutrient mapping for a given NutrientKey
- *
- * @param key - The NutrientKey to look up
- * @returns The USDA nutrient mapping, or undefined if not found
- */
-export function getUsdaMappingByKey(
+function getUsdaMappingByKey(
   key: NutrientKey
 ): UsdaNutrientMapping | undefined {
   return USDA_NUTRIENT_MAP_BY_KEY.get(key);
 }
 
-/**
- * Get the USDA nutrient number for a given NutrientKey
- *
- * @param key - The NutrientKey to look up
- * @returns The USDA nutrient number, or undefined if not found
- */
+/** Get the USDA nutrient number for a NutrientKey. */
 export function getUsdaNumberByKey(key: NutrientKey): number | undefined {
   return getUsdaMappingByKey(key)?.usdaNumber;
 }
 
-/**
- * Get the NutrientKey for a given USDA nutrient number
- *
- * @param usdaNumber - The USDA nutrient number to look up
- * @returns The NutrientKey, or undefined if not found
- */
+/** Get the NutrientKey for a USDA nutrient number. */
 export function getNutrientKeyByUsdaNumber(
   usdaNumber: number
 ): NutrientKey | undefined {
   return USDA_NUMBER_TO_NUTRIENT_KEY.get(usdaNumber);
 }
 
-/**
- * Type definition for USDA API response nutrient structure
- */
+/** USDA API response nutrient structure. */
 export type UsdaFoodNutrient = {
   nutrientId?: number;
   nutrientNumber?: string;
@@ -382,13 +358,7 @@ export type UsdaFoodNutrient = {
   unitName?: string;
 };
 
-/**
- * Convert USDA API nutrient values to our project's NutrientKey format
- * Handles mapping from USDA nutrient IDs to our internal format with unit conversions
- *
- * @param usdaNutrients - Array of nutrient data from USDA FDC API
- * @returns Object with NutrientKey keys and their numeric values
- */
+/** Convert USDA API nutrient values to NutrientKey format. */
 export function convertUsdaNutrients(
   usdaNutrients: UsdaFoodNutrient[]
 ): Partial<Record<NutrientKey, number>> {
@@ -422,13 +392,7 @@ export function convertUsdaNutrients(
   return result;
 }
 
-/**
- * Check if all required nutrients are present in the conversion result
- *
- * @param nutrients - The converted nutrient record
- * @param requiredKeys - Array of NutrientKey values that are required
- * @returns true if all required keys are present with non-null values
- */
+/** Check if all required nutrients are present. */
 export function hasAllRequiredNutrients(
   nutrients: Partial<Record<NutrientKey, number>>,
   requiredKeys: NutrientKey[]
@@ -438,11 +402,3 @@ export function hasAllRequiredNutrients(
   );
 }
 
-/**
- * Get all USDA nutrient numbers as an array (useful for batch API queries)
- *
- * @returns Array of all USDA nutrient numbers in the mapping
- */
-export function getAllUsdaNutrientNumbers(): number[] {
-  return USDA_NUTRIENT_MAP.map((m) => m.usdaNumber);
-}

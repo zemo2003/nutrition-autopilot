@@ -77,6 +77,39 @@ function addScaledNutrients(target: NutrientMap, lot: ConsumedLotInput) {
   }
 }
 
+/**
+ * Enforce FDA nutrient hierarchy invariants (mutates in place):
+ *  - carb_g ≥ max(sugars_g, fiber_g, sugars_g + fiber_g)
+ *  - fat_g ≥ sat_fat_g + trans_fat_g
+ *  - added_sugars_g ≤ sugars_g
+ *  - kcal ≥ 50% of Atwater estimate (catches implausibly low values)
+ */
+export function enforceNutrientHierarchy(map: NutrientMap): void {
+  const sugars = map.sugars_g ?? 0;
+  const addedSugars = map.added_sugars_g ?? 0;
+  const fiber = map.fiber_g ?? 0;
+  const carbFloor = Math.max(sugars, fiber, sugars + fiber);
+  if ((map.carb_g ?? 0) < carbFloor) {
+    map.carb_g = carbFloor;
+  }
+
+  const satFat = map.sat_fat_g ?? 0;
+  const transFat = map.trans_fat_g ?? 0;
+  const fatFloor = satFat + transFat;
+  if ((map.fat_g ?? 0) < fatFloor) {
+    map.fat_g = fatFloor;
+  }
+
+  if (addedSugars > sugars) {
+    map.added_sugars_g = sugars;
+  }
+
+  const atwaterKcal = (map.protein_g ?? 0) * 4 + (map.carb_g ?? 0) * 4 + (map.fat_g ?? 0) * 9;
+  if ((map.kcal ?? 0) < atwaterKcal * 0.5) {
+    map.kcal = Math.round(atwaterKcal * 10) / 10;
+  }
+}
+
 export function computeSkuLabel(input: LabelComputationInput): LabelComputationResult {
   const totalNutrients: NutrientMap = {};
   let totalWeight = 0;
@@ -221,7 +254,7 @@ export function computeSkuLabel(input: LabelComputationInput): LabelComputationR
   const percentError = rawCalories > 0 ? Math.abs(delta / rawCalories) : (macroKcal > 0 ? 1 : 0);
   const pass = percentError <= tolerancePct;
 
-  // BUG FIX 3: Calculate %DV for all nutrients that have FDA daily values
+  // Calculate %DV for all nutrients that have FDA daily values
   const percentDV: Partial<Record<NutrientKey, number>> = {};
   for (const key of Object.keys(perServing) as NutrientKey[]) {
     const value = perServing[key];

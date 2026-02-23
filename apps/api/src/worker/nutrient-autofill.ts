@@ -5,27 +5,24 @@ import {
   VerificationStatus,
   prisma
 } from "@nutrition/db";
-import { nutrientKeys, type NutrientKey } from "@nutrition/contracts";
+import { CORE_NUTRIENT_KEYS, nutrientKeys, type CoreNutrientKey, type NutrientKey } from "@nutrition/contracts";
 import { searchAndGetBestMatch } from "../lib/usda-client.js";
 import { validateFoodProduct, computeConsensus, type NutrientSource } from "@nutrition/nutrition-engine";
 import usdaFallbackData from "../../../../packages/data/usda-fallbacks.json" assert { type: "json" };
 
 type FullNutrients = Partial<Record<NutrientKey, number>>;
 
-// Legacy types kept for OpenFoodFacts which still returns only 5 core nutrients
-const coreKeys = ["kcal", "protein_g", "carb_g", "fat_g", "sodium_mg"] as const;
-
-type CoreKey = (typeof coreKeys)[number];
-type CoreNutrients = Partial<Record<CoreKey, number>>;
+type CoreNutrients = Partial<Record<CoreNutrientKey, number>>;
 
 // ─── USDA Fallback (54 ingredients × 40 nutrients) ────────────────
-const usdaIngredients = (usdaFallbackData as any).ingredients as Record<string, {
+type UsdaFallbackEntry = {
   fdcId: number;
   description: string;
   dataType: string;
   category: string;
   nutrients: Record<string, number>;
-}>;
+};
+const usdaIngredients = (usdaFallbackData as { ingredients: Record<string, UsdaFallbackEntry> }).ingredients;
 
 type AutofillResult = {
   values: Partial<Record<NutrientKey, number>>;
@@ -85,9 +82,7 @@ async function fetchOpenFoodFactsByUpc(upc: string): Promise<AutofillResult | nu
     if (!json || json.status !== 1 || !json.product) return null;
 
     const nutriments = json.product.nutriments ?? {};
-    // BUG FIX: old code was `toNumber(kcal_100g) ?? (toNumber(kj_100g) ?? 0) / 4.184`
-    // which evaluated to `0 / 4.184 = 0` when kcal was null and kj was also null,
-    // but more critically: when kcal_100g was 0 (falsy), it would fall through to kJ branch
+    // Prefer kcal; fall back to kJ conversion only when kcal is absent
     const kcalDirect = toNumber(nutriments["energy-kcal_100g"]);
     const kjDirect = toNumber(nutriments["energy-kj_100g"]);
     const kcal = kcalDirect !== null ? kcalDirect : (kjDirect !== null ? kjDirect / 4.184 : null);
@@ -106,7 +101,7 @@ async function fetchOpenFoodFactsByUpc(upc: string): Promise<AutofillResult | nu
     if (fat !== null && Number.isFinite(fat) && fat >= 0) values.fat_g = fat;
     if (sodiumMg !== null && Number.isFinite(sodiumMg) && sodiumMg >= 0) values.sodium_mg = sodiumMg;
 
-    const populatedCore = ["kcal", "protein_g", "carb_g", "fat_g"].filter((k) => typeof values[k as CoreKey] === "number").length;
+    const populatedCore = ["kcal", "protein_g", "carb_g", "fat_g"].filter((k) => typeof values[k as CoreNutrientKey] === "number").length;
     if (populatedCore < 2) return null;
 
     return {
@@ -154,78 +149,78 @@ async function fetchUsdaFdc(productName: string): Promise<AutofillResult | null>
 
 /**
  * Name-based fuzzy match to USDA fallback. Returns full 40-nutrient profile.
- * More specific matches checked first to avoid false positives (e.g., "coconut oil" before "oil").
+ * Ordered from most specific → least specific to avoid false positives.
  */
+const NAME_MATCH_TABLE: Array<{ patterns: string[]; key: string }> = [
+  // Compound phrases first (more specific)
+  { patterns: ["egg white"],                                key: "ING-EGG-WHITES" },
+  { patterns: ["greek yogurt"],                             key: "ING-GREEK-YOGURT-NONFAT" },
+  { patterns: ["cottage cheese"],                           key: "ING-COTTAGE-CHEESE-LOWFAT" },
+  { patterns: ["cream cheese"],                             key: "ING-CREAM-CHEESE" },
+  { patterns: ["cheddar"],                                  key: "ING-CHEDDAR-CHEESE" },
+  { patterns: ["peanut butter"],                            key: "ING-PEANUT-BUTTER" },
+  { patterns: ["olive oil"],                                key: "ING-OLIVE-OIL" },
+  { patterns: ["coconut oil"],                              key: "ING-COCONUT-OIL" },
+  { patterns: ["sweet potato"],                             key: "ING-SWEET-POTATO-COOKED" },
+  { patterns: ["brown rice"],                               key: "ING-BROWN-RICE-COOKED" },
+  { patterns: ["whole wheat bread", "wheat bread"],         key: "ING-BREAD-WHOLE-WHEAT" },
+  { patterns: ["bell pepper", "red pepper"],                key: "ING-BELL-PEPPER-RED" },
+  { patterns: ["chia seed"],                                key: "ING-CHIA-SEEDS" },
+  { patterns: ["flax seed", "flaxseed"],                    key: "ING-FLAX-SEEDS" },
+  { patterns: ["black bean"],                               key: "ING-BLACK-BEANS-COOKED" },
+  { patterns: ["kidney bean"],                              key: "ING-KIDNEY-BEANS-COOKED" },
+  // Meats default to COOKED profiles (recipes specify finished weights)
+  { patterns: ["ground turkey"],                            key: "ING-GROUND-TURKEY-93-COOKED" },
+  { patterns: ["ground beef"],                              key: "ING-LEAN-GROUND-BEEF-95-COOKED" },
+  { patterns: ["chicken thigh"],                            key: "ING-CHICKEN-THIGH-RAW" },       // TODO: add cooked thigh
+  { patterns: ["chicken breast"],                           key: "ING-CHICKEN-BREAST-COOKED" },
+  // Single-word matches
+  { patterns: ["egg"],                                      key: "ING-EGGS-WHOLE" },
+  { patterns: ["chicken"],                                  key: "ING-CHICKEN-BREAST-COOKED" },
+  { patterns: ["turkey"],                                   key: "ING-GROUND-TURKEY-93-COOKED" },
+  { patterns: ["beef"],                                     key: "ING-LEAN-GROUND-BEEF-95-COOKED" },
+  { patterns: ["salmon"],                                   key: "ING-SALMON-ATLANTIC-RAW" },      // TODO: add cooked salmon
+  { patterns: ["cod", "fish"],                              key: "ING-COD-COOKED" },
+  { patterns: ["tuna"],                                     key: "ING-TUNA-DRAINED" },
+  { patterns: ["shrimp"],                                   key: "ING-SHRIMP-COOKED" },
+  { patterns: ["tofu"],                                     key: "ING-TOFU-FIRM" },
+  { patterns: ["milk"],                                     key: "ING-MILK" },
+  { patterns: ["yogurt"],                                   key: "ING-GREEK-YOGURT-NONFAT" },
+  { patterns: ["butter"],                                   key: "ING-BUTTER" },
+  { patterns: ["oat"],                                      key: "ING-ROLLED-OATS-DRY" },
+  { patterns: ["quinoa"],                                   key: "ING-QUINOA-COOKED" },
+  { patterns: ["rice"],                                     key: "ING-WHITE-RICE-COOKED" },
+  { patterns: ["penne", "pasta", "spaghetti"],              key: "ING-PENNE-DRY" },
+  { patterns: ["bagel"],                                    key: "ING-BAGEL-PLAIN" },
+  { patterns: ["bread"],                                    key: "ING-BREAD-WHOLE-WHEAT" },
+  { patterns: ["chickpea", "garbanzo"],                     key: "ING-CHICKPEAS-COOKED" },
+  { patterns: ["lentil"],                                   key: "ING-LENTILS-COOKED" },
+  { patterns: ["bean"],                                     key: "ING-KIDNEY-BEANS-COOKED" },
+  { patterns: ["broccoli"],                                 key: "ING-BROCCOLI-RAW" },
+  { patterns: ["spinach"],                                  key: "ING-SPINACH-RAW" },
+  { patterns: ["kale"],                                     key: "ING-KALE-RAW" },
+  { patterns: ["carrot"],                                   key: "ING-CARROT-RAW" },
+  { patterns: ["tomato"],                                   key: "ING-ROMA-TOMATO" },
+  { patterns: ["cucumber"],                                 key: "ING-ENGLISH-SEEDLESS-CUCUMBER" },
+  { patterns: ["banana"],                                   key: "ING-BANANA" },
+  { patterns: ["blueberr"],                                 key: "ING-BLUEBERRY" },
+  { patterns: ["strawberr"],                                key: "ING-STRAWBERRY" },
+  { patterns: ["apple"],                                    key: "ING-APPLE" },
+  { patterns: ["avocado"],                                  key: "ING-AVOCADO" },
+  { patterns: ["almond"],                                   key: "ING-ALMONDS" },
+  { patterns: ["walnut"],                                   key: "ING-WALNUTS" },
+  { patterns: ["honey"],                                    key: "ING-HONEY" },
+  { patterns: ["granola"],                                  key: "ING-GRANOLA" },
+  { patterns: ["gatorade"],                                 key: "ING-GATORADE-FROST" },
+];
+
 function fallbackByName(productName: string): { key: string; nutrients: FullNutrients } | null {
   const n = normalizeText(productName);
-
-  // Compound phrases first (more specific)
-  if (n.includes("egg white"))        return lookup("ING-EGG-WHITES");
-  if (n.includes("greek yogurt"))     return lookup("ING-GREEK-YOGURT-NONFAT");
-  if (n.includes("cottage cheese"))   return lookup("ING-COTTAGE-CHEESE-LOWFAT");
-  if (n.includes("cream cheese"))     return lookup("ING-CREAM-CHEESE");
-  if (n.includes("cheddar"))          return lookup("ING-CHEDDAR-CHEESE");
-  if (n.includes("peanut butter"))    return lookup("ING-PEANUT-BUTTER");
-  if (n.includes("olive oil"))        return lookup("ING-OLIVE-OIL");
-  if (n.includes("coconut oil"))      return lookup("ING-COCONUT-OIL");
-  if (n.includes("sweet potato"))     return lookup("ING-SWEET-POTATO-COOKED");
-  if (n.includes("brown rice"))       return lookup("ING-BROWN-RICE-COOKED");
-  if (n.includes("whole wheat bread") || n.includes("wheat bread")) return lookup("ING-BREAD-WHOLE-WHEAT");
-  if (n.includes("bell pepper") || n.includes("red pepper")) return lookup("ING-BELL-PEPPER-RED");
-  if (n.includes("chia seed"))        return lookup("ING-CHIA-SEEDS");
-  if (n.includes("flax seed") || n.includes("flaxseed")) return lookup("ING-FLAX-SEEDS");
-  if (n.includes("black bean"))       return lookup("ING-BLACK-BEANS-COOKED");
-  if (n.includes("kidney bean"))      return lookup("ING-KIDNEY-BEANS-COOKED");
-  // AUDIT FIX (Priority 4): Standardize all meats to COOKED state.
-  // Recipes typically specify finished/cooked weights. Using RAW profiles for
-  // cooked ingredients causes 10-37% calorie underreporting.
-  // If name explicitly says "raw", use RAW profile; otherwise default to COOKED.
-  if (n.includes("ground turkey"))    return lookup("ING-GROUND-TURKEY-93-COOKED");    // COOKED: 182 kcal/100g
-  if (n.includes("ground beef"))      return lookup("ING-LEAN-GROUND-BEEF-95-COOKED"); // COOKED: 173 kcal/100g (was RAW: 137)
-  if (n.includes("chicken thigh") && n.includes("raw")) return lookup("ING-CHICKEN-THIGH-RAW");
-  if (n.includes("chicken thigh"))    return lookup("ING-CHICKEN-THIGH-RAW");           // RAW: no cooked entry yet — TODO: add cooked thigh
-  if (n.includes("chicken breast") && n.includes("raw")) return lookup("ING-CHICKEN-BREAST-RAW");
-  if (n.includes("chicken breast"))   return lookup("ING-CHICKEN-BREAST-COOKED");       // COOKED: 165 kcal/100g (was RAW unless "cooked" in name)
-
-  // Single-word matches — default to COOKED state for meats
-  if (n.includes("egg"))              return lookup("ING-EGGS-WHOLE");
-  if (n.includes("chicken"))          return lookup("ING-CHICKEN-BREAST-COOKED");       // COOKED (was RAW)
-  if (n.includes("turkey"))           return lookup("ING-GROUND-TURKEY-93-COOKED");     // COOKED
-  if (n.includes("beef"))             return lookup("ING-LEAN-GROUND-BEEF-95-COOKED");  // COOKED (was RAW)
-  if (n.includes("salmon"))           return lookup("ING-SALMON-ATLANTIC-RAW");         // RAW: no cooked entry yet — TODO: add cooked salmon
-  if (n.includes("cod") || n.includes("fish")) return lookup("ING-COD-COOKED");        // COOKED
-  if (n.includes("tuna"))             return lookup("ING-TUNA-DRAINED");                // DRAINED/COOKED
-  if (n.includes("shrimp"))           return lookup("ING-SHRIMP-COOKED");
-  if (n.includes("tofu"))             return lookup("ING-TOFU-FIRM");
-  if (n.includes("milk"))             return lookup("ING-MILK");
-  if (n.includes("yogurt"))           return lookup("ING-GREEK-YOGURT-NONFAT");
-  if (n.includes("butter"))           return lookup("ING-BUTTER");
-  if (n.includes("oat"))              return lookup("ING-ROLLED-OATS-DRY");
-  if (n.includes("quinoa"))           return lookup("ING-QUINOA-COOKED");
-  if (n.includes("rice"))             return lookup("ING-WHITE-RICE-COOKED");
-  if (n.includes("penne") || n.includes("pasta") || n.includes("spaghetti")) return lookup("ING-PENNE-DRY");
-  if (n.includes("bagel"))            return lookup("ING-BAGEL-PLAIN");
-  if (n.includes("bread"))            return lookup("ING-BREAD-WHOLE-WHEAT");
-  if (n.includes("chickpea") || n.includes("garbanzo")) return lookup("ING-CHICKPEAS-COOKED");
-  if (n.includes("lentil"))           return lookup("ING-LENTILS-COOKED");
-  if (n.includes("bean"))             return lookup("ING-KIDNEY-BEANS-COOKED");
-  if (n.includes("broccoli"))         return lookup("ING-BROCCOLI-RAW");
-  if (n.includes("spinach"))          return lookup("ING-SPINACH-RAW");
-  if (n.includes("kale"))             return lookup("ING-KALE-RAW");
-  if (n.includes("carrot"))           return lookup("ING-CARROT-RAW");
-  if (n.includes("tomato"))           return lookup("ING-ROMA-TOMATO");
-  if (n.includes("cucumber"))         return lookup("ING-ENGLISH-SEEDLESS-CUCUMBER");
-  if (n.includes("banana"))           return lookup("ING-BANANA");
-  if (n.includes("blueberr"))         return lookup("ING-BLUEBERRY");
-  if (n.includes("strawberr"))        return lookup("ING-STRAWBERRY");
-  if (n.includes("apple"))            return lookup("ING-APPLE");
-  if (n.includes("avocado"))          return lookup("ING-AVOCADO");
-  if (n.includes("almond"))           return lookup("ING-ALMONDS");
-  if (n.includes("walnut"))           return lookup("ING-WALNUTS");
-  if (n.includes("honey"))            return lookup("ING-HONEY");
-  if (n.includes("granola"))          return lookup("ING-GRANOLA");
-  if (n.includes("gatorade"))         return lookup("ING-GATORADE-FROST");
-
+  for (const { patterns, key } of NAME_MATCH_TABLE) {
+    if (patterns.some((p) => n.includes(p))) {
+      return lookup(key);
+    }
+  }
   return null;
 }
 
@@ -233,50 +228,6 @@ function lookup(key: string): { key: string; nutrients: FullNutrients } | null {
   const entry = usdaIngredients[key];
   if (!entry) return null;
   return { key, nutrients: entry.nutrients as FullNutrients };
-}
-
-async function resolveNutrients(product: { upc: string | null; name: string; ingredient: { canonicalKey: string } }): Promise<AutofillResult | null> {
-  // 1. OpenFoodFacts UPC lookup
-  const upc = normalizedUpc(product.upc);
-  if (upc) {
-    const fromOff = await fetchOpenFoodFactsByUpc(upc);
-    if (fromOff) return fromOff;
-  }
-
-  // 2. USDA FDC live search (returns all 40 nutrients)
-  const fromUsda = await fetchUsdaFdc(product.name);
-  if (fromUsda) return fromUsda;
-
-  // 3. USDA pre-built fallback (54 ingredients × 40 nutrients)
-  const fullFallback = resolveFallbackNutrients(product.ingredient.canonicalKey);
-  if (fullFallback) {
-    const entry = usdaIngredients[product.ingredient.canonicalKey];
-    return {
-      values: fullFallback,
-      sourceType: NutrientSourceType.DERIVED,
-      sourceRef: `usda-fallback-json:${product.ingredient.canonicalKey}:fdc-${entry?.fdcId ?? "unknown"}`,
-      confidence: 0.85, // Higher than old fallback — sourced from verified USDA data
-      evidenceGrade: NutrientEvidenceGrade.USDA_GENERIC,
-      historicalException: false,
-      method: "ingredient_fallback"
-    };
-  }
-
-  // 4. Name-based fuzzy match against USDA fallback
-  const nameMatch = fallbackByName(product.name);
-  if (nameMatch) {
-    return {
-      values: nameMatch.nutrients,
-      sourceType: NutrientSourceType.DERIVED,
-      sourceRef: `usda-fallback-name:${nameMatch.key}`,
-      confidence: 0.70,
-      evidenceGrade: NutrientEvidenceGrade.INFERRED_FROM_INGREDIENT,
-      historicalException: false,
-      method: "ingredient_fallback"
-    };
-  }
-
-  return null;
 }
 
 async function upsertNutrientsForProduct(input: {
@@ -295,8 +246,7 @@ async function upsertNutrientsForProduct(input: {
   });
   const defByKey = new Map(defs.map((d) => [d.key, d]));
 
-  // AUDIT FIX (Priority 5): Runtime sanity validation before DB write.
-  // Prevents silent data corruption from bad source data or unit mismatches.
+  // Sanity bounds per 100 g — reject values outside physical range
   const SANITY_LIMITS: Partial<Record<NutrientKey, { min: number; max: number }>> = {
     kcal: { min: 0, max: 900 },           // No food exceeds ~900 kcal/100g (pure fat = 884)
     protein_g: { min: 0, max: 100 },       // Pure protein isolate ≈ 90g/100g

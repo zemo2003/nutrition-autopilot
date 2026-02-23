@@ -43,6 +43,11 @@ export const nutrientKeys = [
 
 export type NutrientKey = (typeof nutrientKeys)[number];
 
+/** The 5 macros + sodium required for a minimally valid nutrition label. */
+export const CORE_NUTRIENT_KEYS = ["kcal", "protein_g", "carb_g", "fat_g", "sodium_mg"] as const;
+
+export type CoreNutrientKey = (typeof CORE_NUTRIENT_KEYS)[number];
+
 export type NUTRIENT_UNIT = "kcal" | "g" | "mg" | "mcg";
 
 export type NUTRIENT_DEF = {

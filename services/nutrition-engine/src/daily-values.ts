@@ -538,149 +538,16 @@ export function getMandatoryNutrients(): DailyValueEntry[] {
     .sort((a, b) => a.displayOrder - b.displayOrder);
 }
 
-/**
- * Get daily value entry for a specific nutrient
- *
- * @param key - Nutrient identifier
- * @returns DailyValueEntry or undefined if not found
- */
-export function getDailyValueEntry(key: NutrientKey): DailyValueEntry | undefined {
-  return FDA_DAILY_VALUES[key];
-}
-
-/**
- * Get numeric daily value for a specific nutrient
- * Backward compatibility wrapper - returns just the number
- *
- * @param key - Nutrient identifier
- * @returns Daily value amount or undefined if not found
- */
+/** Get numeric daily value for a nutrient key. */
 export function getDailyValue(key: NutrientKey): number | undefined {
   return FDA_DAILY_VALUES[key]?.dailyValue;
 }
 
-/**
- * Get all nutrients with established daily values (DV > 0)
- * Excludes nutrients like trans fat and total sugars with no DV
- *
- * @returns Array of DailyValueEntry objects with DV > 0
- */
-export function getNutrientswithDV(): DailyValueEntry[] {
-  return Object.values(FDA_DAILY_VALUES)
-    .filter((entry) => entry.dailyValue > 0)
-    .sort((a, b) => a.displayOrder - b.displayOrder);
-}
-
-/**
- * Get all nutrients organized by category for label display
- *
- * @returns Organized nutrient groups with labels and entries
- */
-export function getNutrientsByCategory(): {
-  macronutrients: DailyValueEntry[];
-  minerals: DailyValueEntry[];
-  vitamins: DailyValueEntry[];
-  other: DailyValueEntry[];
-} {
-  const all = Object.values(FDA_DAILY_VALUES).sort(
-    (a, b) => a.displayOrder - b.displayOrder
-  );
-
-  return {
-    macronutrients: all.filter(
-      (n) =>
-        [
-          "kcal",
-          "fat_g",
-          "sat_fat_g",
-          "trans_fat_g",
-          "cholesterol_mg",
-          "sodium_mg",
-          "carb_g",
-          "fiber_g",
-          "sugars_g",
-          "added_sugars_g",
-          "protein_g",
-        ].includes(n.key)
-    ),
-    minerals: all.filter(
-      (n) =>
-        [
-          "calcium_mg",
-          "iron_mg",
-          "potassium_mg",
-          "phosphorus_mg",
-          "iodine_mcg",
-          "magnesium_mg",
-          "zinc_mg",
-          "selenium_mcg",
-          "copper_mg",
-          "manganese_mg",
-          "chromium_mcg",
-          "molybdenum_mcg",
-          "chloride_mg",
-        ].includes(n.key)
-    ),
-    vitamins: all.filter(
-      (n) =>
-        [
-          "vitamin_d_mcg",
-          "vitamin_a_mcg",
-          "vitamin_c_mg",
-          "vitamin_e_mg",
-          "vitamin_k_mcg",
-          "thiamin_mg",
-          "riboflavin_mg",
-          "niacin_mg",
-          "vitamin_b6_mg",
-          "folate_mcg",
-          "vitamin_b12_mcg",
-          "biotin_mcg",
-          "pantothenic_acid_mg",
-        ].includes(n.key)
-    ),
-    other: all.filter(
-      (n) =>
-        ["choline_mg", "omega3_g", "omega6_g"].includes(n.key)
-    ),
-  };
-}
-
-/**
- * Backward compatibility: export the simple daily values map
- * Deprecated: use FDA_DAILY_VALUES and related functions instead
- */
-export const dailyValues: Partial<Record<NutrientKey, number>> = Object.fromEntries(
-  Object.values(FDA_DAILY_VALUES).map((entry) => [entry.key, entry.dailyValue])
-) as Partial<Record<NutrientKey, number>>;
-
-/**
- * Backward compatibility function
- * Deprecated: use computePercentDV instead
- */
+/** Compute %DV with the (value, key) arg order used by engine.ts. */
 export function calculatePercentDV(
   value: number,
   nutrientKey: NutrientKey
 ): number | undefined {
   const result = computePercentDV(nutrientKey, value);
   return result ?? undefined;
-}
-
-/**
- * Backward compatibility function
- * Deprecated: use getDailyValue instead
- */
-export function hassDailyValue(nutrientKey: NutrientKey): boolean {
-  const entry = FDA_DAILY_VALUES[nutrientKey];
-  return entry !== undefined && entry.dailyValue > 0;
-}
-
-/**
- * Backward compatibility function
- * Deprecated: use Object.keys(FDA_DAILY_VALUES) instead
- */
-export function getNutrientKeysWithDV(): NutrientKey[] {
-  return Object.keys(FDA_DAILY_VALUES).filter(
-    (key) => FDA_DAILY_VALUES[key as NutrientKey].dailyValue > 0
-  ) as NutrientKey[];
 }

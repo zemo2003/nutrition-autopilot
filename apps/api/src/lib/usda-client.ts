@@ -1,5 +1,5 @@
-import { nutrientKeys, type NutrientKey } from "@nutrition/contracts";
-import { USDA_NUTRIENT_MAP, convertUsdaNutrients } from "@nutrition/nutrition-engine";
+import type { NutrientKey } from "@nutrition/contracts";
+import { convertUsdaNutrients } from "@nutrition/nutrition-engine";
 
 const USDA_API_BASE = "https://api.nal.usda.gov/fdc/v1";
 

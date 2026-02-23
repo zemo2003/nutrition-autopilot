@@ -6,7 +6,7 @@ import { execFile as execFileCb } from "node:child_process";
 import express from "express";
 import multer from "multer";
 import { addHours, endOfMonth, parse, startOfMonth } from "date-fns";
-import { prisma, NutrientSourceType, VerificationStatus } from "@nutrition/db";
+import { prisma, NutrientSourceType, VerificationStatus, VerificationTaskStatus, VerificationTaskSeverity } from "@nutrition/db";
 import { parseInstacartOrders, parsePilotMeals, parseSotWorkbook, mapOrderLineToIngredient } from "@nutrition/importers";
 import { getDefaultUser, getPrimaryOrganization } from "../lib/context.js";
 import { freezeLabelFromScheduleDone, buildLineageTree } from "../lib/label-freeze.js";
@@ -1206,7 +1206,8 @@ v1Router.get("/quality/summary", async (req, res) => {
     if (keysWithNumbers >= nutrientDefinitionCount) {
       completeLabelNutrientCoverage += 1;
     }
-    if (payload.provisional === true || (payload.evidenceSummary as any)?.provisional === true) {
+    const evidence = payload.evidenceSummary as Record<string, unknown> | undefined;
+    if (payload.provisional === true || evidence?.provisional === true) {
       provisionalLabels += 1;
     }
   }
@@ -1295,18 +1296,23 @@ v1Router.get("/labels/stale", async (req, res) => {
 v1Router.get("/verification/tasks", async (req, res) => {
   const org = await getPrimaryOrganization();
 
-  const status = typeof req.query.status === "string" ? req.query.status.toUpperCase() : undefined;
-  const severity = typeof req.query.severity === "string" ? req.query.severity.toUpperCase() : undefined;
+  const statusRaw = typeof req.query.status === "string" ? req.query.status.toUpperCase() : undefined;
+  const severityRaw = typeof req.query.severity === "string" ? req.query.severity.toUpperCase() : undefined;
   const sourceType = typeof req.query.sourceType === "string" ? req.query.sourceType.toUpperCase() : undefined;
   const historicalException = parseBoolean(req.query.historicalException, false);
   const confidenceMinRaw = Number(req.query.confidenceMin);
   const confidenceMin = Number.isFinite(confidenceMinRaw) ? confidenceMinRaw : null;
 
+  const status = statusRaw && Object.values(VerificationTaskStatus).includes(statusRaw as VerificationTaskStatus)
+    ? (statusRaw as VerificationTaskStatus) : undefined;
+  const severity = severityRaw && Object.values(VerificationTaskSeverity).includes(severityRaw as VerificationTaskSeverity)
+    ? (severityRaw as VerificationTaskSeverity) : undefined;
+
   const tasks = await prisma.verificationTask.findMany({
     where: {
       organizationId: org.id,
-      ...(status ? { status: status as any } : {}),
-      ...(severity ? { severity: severity as any } : {})
+      ...(status ? { status } : {}),
+      ...(severity ? { severity } : {})
     },
     orderBy: [{ severity: "desc" }, { createdAt: "asc" }],
     include: { reviews: true }

@@ -1,11 +1,12 @@
 import { addHours } from "date-fns";
 import { NutrientEvidenceGrade, NutrientSourceType, Prisma, VerificationStatus, prisma } from "@nutrition/db";
+import { CORE_NUTRIENT_KEYS } from "@nutrition/contracts";
 import { mapOrderLineToIngredient } from "@nutrition/importers";
 import type { InstacartOrderRow, PilotMealRow } from "@nutrition/importers";
 import { freezeLabelFromScheduleDone } from "./label-freeze.js";
 import { resolveFallbackNutrientsForIngredientKey } from "../worker/nutrient-autofill.js";
 
-const coreNutrientKeys = ["kcal", "protein_g", "carb_g", "fat_g", "sodium_mg"] as const;
+const coreNutrientKeys = CORE_NUTRIENT_KEYS;
 
 const mealSlotPriority: Record<string, number> = {
   BREAKFAST: 1,

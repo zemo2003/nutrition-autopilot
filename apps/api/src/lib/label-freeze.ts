@@ -1,12 +1,13 @@
-import { nutrientKeys, type NutrientKey } from "@nutrition/contracts";
+import { CORE_NUTRIENT_KEYS, nutrientKeys, type NutrientKey } from "@nutrition/contracts";
 import {
+  LabelType,
   NutrientEvidenceGrade,
   Prisma,
   ScheduleStatus,
   VerificationStatus,
   prisma
 } from "@nutrition/db";
-import { computeSkuLabel, type NutrientMap, validateFoodProduct, type PlausibilityIssue, detectNutrientProfileState } from "@nutrition/nutrition-engine";
+import { computeSkuLabel, enforceNutrientHierarchy, type NutrientMap, validateFoodProduct, type PlausibilityIssue, detectNutrientProfileState, type PreparedState } from "@nutrition/nutrition-engine";
 import { servedAtFromSchedule } from "./served-time.js";
 
 const inferredEvidenceGrades = new Set<NutrientEvidenceGrade>([
@@ -22,7 +23,7 @@ const reasonCodeOrder = [
   "SYNTHETIC_LOT_USAGE"
 ] as const;
 
-const coreQualityKeys: NutrientKey[] = ["kcal", "protein_g", "carb_g", "fat_g", "sodium_mg"];
+const coreQualityKeys: readonly NutrientKey[] = CORE_NUTRIENT_KEYS;
 
 type ReasonCode = (typeof reasonCodeOrder)[number];
 
@@ -112,11 +113,11 @@ function toNutrientMap(values: NutrientRow[]): NutrientMap {
 function nextLabelVersion(
   tx: Prisma.TransactionClient,
   organizationId: string,
-  labelType: string,
+  labelType: LabelType,
   externalRefId: string
 ) {
   return tx.labelSnapshot.count({
-    where: { organizationId, labelType: labelType as any, externalRefId }
+    where: { organizationId, labelType, externalRefId }
   }).then((count) => count + 1);
 }
 
@@ -181,48 +182,6 @@ function summarizeEvidence(rows: NutrientRow[], syntheticLot: boolean): Evidence
     sourceRefs: uniq([...sourceRefs]),
     gradeBreakdown
   };
-}
-
-/**
- * Enforce nutrient hierarchy invariants:
- *   sat_fat_g + trans_fat_g <= fat_g
- *   sugars_g <= carb_g
- *   added_sugars_g <= sugars_g
- *   fiber_g <= carb_g
- *
- * When sub-components exceed their parent macro (due to data imported
- * independently per-nutrient), promote the parent to the sum of its
- * children so the label stays internally consistent.
- */
-function enforceNutrientHierarchy(map: NutrientMap): void {
-  // Carb children: sugars and fiber both come from carbohydrate
-  const sugars = map.sugars_g ?? 0;
-  const addedSugars = map.added_sugars_g ?? 0;
-  const fiber = map.fiber_g ?? 0;
-  const carbFloor = Math.max(sugars, fiber, sugars + fiber);
-  if ((map.carb_g ?? 0) < carbFloor) {
-    map.carb_g = carbFloor;
-  }
-
-  // Fat children: sat_fat and trans_fat come from total fat
-  const satFat = map.sat_fat_g ?? 0;
-  const transFat = map.trans_fat_g ?? 0;
-  const fatFloor = satFat + transFat;
-  if ((map.fat_g ?? 0) < fatFloor) {
-    map.fat_g = fatFloor;
-  }
-
-  // Added sugars can't exceed total sugars
-  if (addedSugars > sugars) {
-    map.added_sugars_g = sugars;
-  }
-
-  // Recalculate kcal floor from Atwater if macros were promoted
-  const atwaterKcal = (map.protein_g ?? 0) * 4 + (map.carb_g ?? 0) * 4 + (map.fat_g ?? 0) * 9;
-  if ((map.kcal ?? 0) < atwaterKcal * 0.5) {
-    // kcal is implausibly low relative to macros — use Atwater estimate
-    map.kcal = Math.round(atwaterKcal * 10) / 10;
-  }
 }
 
 function aggregateNutrientsByLots(lots: ConsumedLot[], servings: number): {
@@ -532,8 +491,7 @@ export async function freezeLabelFromScheduleDone(input: {
       servings: schedule.plannedServings,
       lines: recipe.lines.map((line) => {
         // Infer preparedState from the preparation text when DB still defaults to RAW
-        const dbState = (line as any).preparedState as string | undefined;
-        let preparedState = dbState ?? "RAW";
+        let preparedState = (line.preparedState ?? "RAW") as PreparedState;
         if (preparedState === "RAW" && line.preparation) {
           const prep = line.preparation.toUpperCase();
           if (prep === "COOKED" || prep.includes("COOKED") || prep.includes("DRAINED")) {
@@ -549,7 +507,7 @@ export async function freezeLabelFromScheduleDone(input: {
           gramsPerServing: line.targetGPerServing,
           preparation: line.preparation,
           preparedState,
-          yieldFactor: (line as any).yieldFactor ?? 1.0
+          yieldFactor: line.yieldFactor ?? 1.0
         };
       }),
       consumedLots: consumedLots.map((lot) => ({
@@ -568,9 +526,7 @@ export async function freezeLabelFromScheduleDone(input: {
       }
     });
 
-    // Plausibility gate: validate using per-100g normalization (thresholds are per-100g)
-    // BUG FIX: was passing per-serving values to per-100g thresholds — a 250g serving
-    // of chicken would show 56g protein/serving and incorrectly flag as implausible
+    // Plausibility gate: normalize to per-100g before validating (thresholds are per-100g)
     const per100gForValidation: NutrientMap = {} as NutrientMap;
     if (label.servingWeightG > 0) {
       for (const key of nutrientKeys) {
@@ -799,10 +755,18 @@ export async function freezeLabelFromScheduleDone(input: {
   });
 }
 
+type LineageNode = {
+  labelId: string;
+  labelType: LabelType;
+  title: string;
+  metadata: Record<string, unknown>;
+  children: LineageNode[];
+};
+
 export async function buildLineageTree(labelId: string) {
   const visited = new Set<string>();
 
-  async function walk(nodeId: string): Promise<any> {
+  async function walk(nodeId: string): Promise<LineageNode | null> {
     if (visited.has(nodeId)) {
       return null;
     }
@@ -812,7 +776,7 @@ export async function buildLineageTree(labelId: string) {
     if (!node) return null;
 
     const edges = await prisma.labelLineageEdge.findMany({ where: { parentLabelId: nodeId } });
-    const children = [] as any[];
+    const children: LineageNode[] = [];
 
     for (const edge of edges) {
       const child = await walk(edge.childLabelId);

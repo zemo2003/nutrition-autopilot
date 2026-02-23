@@ -2,14 +2,8 @@
   "name": "@nutrition/data",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
-  "description": "USDA fallback data for nutrition autopilot",
-  "exports": {
-    ".": {
-      "default": "./index.ts"
-    }
-  },
-  "dependencies": {
-    "@nutrition/contracts": "0.1.0"
+  "description": "USDA fallback nutrient data (54 ingredients × 40 nutrients)",
+  "scripts": {
+    "test": "echo 'No tests for data package'"
   }
 }
