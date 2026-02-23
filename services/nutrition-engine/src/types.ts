@@ -7,6 +7,12 @@ export type RecipeLineInput = {
   ingredientName: string;
   ingredientAllergens: string[];
   gramsPerServing: number;
+  /** Preparation text (e.g., "grilled", "steamed") */
+  preparation?: string | null;
+  /** State the recipe weight refers to (default: RAW) */
+  preparedState?: "RAW" | "COOKED" | "DRY" | "CANNED" | "FROZEN";
+  /** Cooking yield factor (cooked/raw ratio). Default: 1.0 */
+  yieldFactor?: number;
 };
 
 export type ConsumedLotInput = {
@@ -16,6 +22,8 @@ export type ConsumedLotInput = {
   productName: string;
   gramsConsumed: number;
   nutrientsPer100g: NutrientMap;
+  /** The state of the nutrient profile (RAW, COOKED, etc.) — used for yield correction */
+  nutrientProfileState?: "RAW" | "COOKED" | "DRY" | "CANNED" | "FROZEN";
 };
 
 export type LabelComputationInput = {

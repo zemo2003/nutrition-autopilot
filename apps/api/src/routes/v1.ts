@@ -1240,6 +1240,58 @@ v1Router.get("/quality/summary", async (req, res) => {
   });
 });
 
+// SR-3: Label staleness detection — find labels whose underlying nutrient data
+// has been updated after the label was frozen, indicating the label is stale
+v1Router.get("/labels/stale", async (req, res) => {
+  const org = await getPrimaryOrganization();
+
+  try {
+    // Find all frozen SKU labels with their linked product nutrient updates
+    const staleLabels = await prisma.$queryRaw<Array<{
+      labelId: string;
+      labelTitle: string;
+      frozenAt: Date;
+      productId: string;
+      productName: string;
+      nutrientUpdatedAt: Date;
+      staleDays: number;
+    }>>`
+      SELECT
+        ls.id AS "labelId",
+        ls.title AS "labelTitle",
+        ls."frozenAt",
+        pc.id AS "productId",
+        pc.name AS "productName",
+        MAX(pnv."updatedAt") AS "nutrientUpdatedAt",
+        EXTRACT(DAY FROM MAX(pnv."updatedAt") - ls."frozenAt")::int AS "staleDays"
+      FROM "LabelSnapshot" ls
+      JOIN "LabelLineageEdge" lle ON lle."parentLabelId" = ls.id
+      JOIN "LabelSnapshot" child ON child.id = lle."childLabelId"
+      JOIN "LabelLineageEdge" lle2 ON lle2."parentLabelId" = child.id
+      JOIN "LabelSnapshot" prodLabel ON prodLabel.id = lle2."childLabelId"
+      JOIN "ProductCatalog" pc ON pc.id = prodLabel."externalRefId"
+      JOIN "ProductNutrientValue" pnv ON pnv."productId" = pc.id
+      WHERE ls."organizationId" = ${org.id}
+        AND ls."labelType" = 'SKU'
+        AND ls."frozenAt" IS NOT NULL
+        AND pnv."updatedAt" > ls."frozenAt"
+      GROUP BY ls.id, ls.title, ls."frozenAt", pc.id, pc.name
+      ORDER BY MAX(pnv."updatedAt") DESC
+      LIMIT 100
+    `;
+
+    return res.json({
+      staleCount: staleLabels.length,
+      labels: staleLabels
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "staleness check failed",
+      detail: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
 v1Router.get("/verification/tasks", async (req, res) => {
   const org = await getPrimaryOrganization();
 

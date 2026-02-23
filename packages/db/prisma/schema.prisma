@@ -76,6 +76,14 @@ enum VerificationTaskStatus {
   RESOLVED
 }
 
+enum PreparedState {
+  RAW
+  COOKED
+  DRY
+  CANNED
+  FROZEN
+}
+
 enum ImportJobType {
   SOT
   INSTACART_ORDER
@@ -257,6 +265,8 @@ model RecipeLine {
   lineOrder      Int
   targetGPerServing Float
   preparation    String?
+  preparedState  PreparedState @default(RAW)
+  yieldFactor    Float    @default(1.0)
   required       Boolean  @default(true)
   createdAt      DateTime @default(now())
   createdBy      String   @default("system")

@@ -12,6 +12,7 @@ import {
 } from "./rounding.js";
 import { calculatePercentDV, getDailyValue } from "./daily-values.js";
 import type { ConsumedLotInput, LabelComputationInput, LabelComputationResult, NutrientMap } from "./types.js";
+import { applyYieldCorrection, inferYieldFactor, type PreparedState } from "./yield-factors.js";
 
 const majorAllergens = [
   "milk",
@@ -80,9 +81,37 @@ export function computeSkuLabel(input: LabelComputationInput): LabelComputationR
   const totalNutrients: NutrientMap = {};
   let totalWeight = 0;
 
+  // Build a lookup from recipeLineId → line input (for yield factor info)
+  const lineByLineId = new Map(input.lines.map((line) => [line.lineId, line]));
+
   for (const lot of input.consumedLots) {
-    totalWeight += lot.gramsConsumed;
-    addScaledNutrients(totalNutrients, lot);
+    const line = lineByLineId.get(lot.recipeLineId);
+
+    // Yield factor correction: if the recipe specifies a prepared state that
+    // differs from the nutrient profile state, adjust grams accordingly.
+    // This eliminates the up-to-37% calorie error from raw/cooked mismatch.
+    let effectiveGrams = lot.gramsConsumed;
+    const recipeState = (line?.preparedState ?? "RAW") as PreparedState;
+    const nutrientState = (lot.nutrientProfileState ?? "RAW") as PreparedState;
+
+    // Get yield factor: prefer explicit from recipe line, fall back to inferred
+    let yieldFactor = line?.yieldFactor ?? 1.0;
+    if (yieldFactor === 1.0 && recipeState !== nutrientState && line) {
+      // Auto-infer yield factor from ingredient name
+      const inferred = inferYieldFactor(line.ingredientName, line.preparation);
+      if (inferred.inferred) {
+        yieldFactor = inferred.factor;
+      }
+    }
+
+    if (yieldFactor !== 1.0 && recipeState !== nutrientState) {
+      effectiveGrams = applyYieldCorrection(lot.gramsConsumed, recipeState, nutrientState, yieldFactor);
+    }
+
+    totalWeight += lot.gramsConsumed; // Use original grams for serving weight
+    // Use adjusted grams for nutrient calculation
+    const adjustedLot = { ...lot, gramsConsumed: effectiveGrams };
+    addScaledNutrients(totalNutrients, adjustedLot);
   }
 
   const servings = input.servings <= 0 ? 1 : input.servings;

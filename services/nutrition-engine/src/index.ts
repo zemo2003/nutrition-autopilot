@@ -5,3 +5,4 @@ export * from "./daily-values.js";
 export * from "./plausibility.js";
 export * from "./usda-mapping.js";
 export * from "./consensus.js";
+export * from "./yield-factors.js";

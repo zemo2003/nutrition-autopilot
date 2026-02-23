@@ -485,7 +485,10 @@ export async function freezeLabelFromScheduleDone(input: {
         lineId: line.id,
         ingredientName: line.ingredient.name,
         ingredientAllergens: line.ingredient.allergenTags,
-        gramsPerServing: line.targetGPerServing
+        gramsPerServing: line.targetGPerServing,
+        preparation: line.preparation,
+        preparedState: (line as any).preparedState ?? "RAW",
+        yieldFactor: (line as any).yieldFactor ?? 1.0
       })),
       consumedLots: consumedLots.map((lot) => ({
         recipeLineId: lot.recipeLineId,

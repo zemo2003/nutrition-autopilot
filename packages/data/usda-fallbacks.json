@@ -106,7 +106,7 @@
       "fdcId": 171077,
       "description": "Chicken, broiler, breast, skinless, raw",
       "dataType": "SR Legacy",
-      "category": "POULTRY",
+      "category": "MEAT_POULTRY",
       "nutrients": {
         "kcal": 120,
         "protein_g": 22.52,
@@ -154,7 +154,7 @@
       "fdcId": 171534,
       "description": "Chicken, broiler, breast, skinless, cooked, roasted",
       "dataType": "SR Legacy",
-      "category": "POULTRY",
+      "category": "MEAT_POULTRY",
       "nutrients": {
         "kcal": 165,
         "protein_g": 31.01,
@@ -202,7 +202,7 @@
       "fdcId": 171476,
       "description": "Chicken, broiler, thigh, skinless, raw",
       "dataType": "SR Legacy",
-      "category": "POULTRY",
+      "category": "MEAT_POULTRY",
       "nutrients": {
         "kcal": 138,
         "protein_g": 19.44,
@@ -250,7 +250,7 @@
       "fdcId": 171498,
       "description": "Turkey, ground, 93% lean, cooked",
       "dataType": "SR Legacy",
-      "category": "POULTRY",
+      "category": "MEAT_POULTRY",
       "nutrients": {
         "kcal": 182,
         "protein_g": 23.39,
@@ -298,7 +298,7 @@
       "fdcId": 174036,
       "description": "Beef, ground, 95% lean, raw",
       "dataType": "SR Legacy",
-      "category": "BEEF",
+      "category": "MEAT_POULTRY",
       "nutrients": {
         "kcal": 137,
         "protein_g": 21.36,
@@ -346,7 +346,7 @@
       "fdcId": 174037,
       "description": "Beef, ground, 95% lean, cooked",
       "dataType": "SR Legacy",
-      "category": "BEEF",
+      "category": "MEAT_POULTRY",
       "nutrients": {
         "kcal": 173,
         "protein_g": 26.10,
@@ -394,7 +394,7 @@
       "fdcId": 175167,
       "description": "Salmon, Atlantic, farmed, raw",
       "dataType": "SR Legacy",
-      "category": "FISH",
+      "category": "FISH_SEAFOOD",
       "nutrients": {
         "kcal": 208,
         "protein_g": 20.42,
@@ -442,7 +442,7 @@
       "fdcId": 171957,
       "description": "Fish, cod, Atlantic, cooked, dry heat",
       "dataType": "SR Legacy",
-      "category": "FISH",
+      "category": "FISH_SEAFOOD",
       "nutrients": {
         "kcal": 105,
         "protein_g": 22.84,
@@ -490,7 +490,7 @@
       "fdcId": 171986,
       "description": "Tuna, canned in water, drained solids",
       "dataType": "SR Legacy",
-      "category": "FISH",
+      "category": "FISH_SEAFOOD",
       "nutrients": {
         "kcal": 116,
         "protein_g": 25.51,
@@ -538,7 +538,7 @@
       "fdcId": 175180,
       "description": "Shrimp, cooked",
       "dataType": "SR Legacy",
-      "category": "SHELLFISH",
+      "category": "FISH_SEAFOOD",
       "nutrients": {
         "kcal": 99,
         "protein_g": 24.24,
@@ -874,7 +874,7 @@
       "fdcId": 173904,
       "description": "Cereals, oats, regular and quick, not fortified, dry",
       "dataType": "SR Legacy",
-      "category": "GRAINS",
+      "category": "GRAINS_CEREALS",
       "nutrients": {
         "kcal": 379,
         "protein_g": 13.15,
@@ -922,7 +922,7 @@
       "fdcId": 169756,
       "description": "Rice, white, long-grain, cooked",
       "dataType": "SR Legacy",
-      "category": "GRAINS",
+      "category": "GRAINS_CEREALS",
       "nutrients": {
         "kcal": 130,
         "protein_g": 2.36,
@@ -970,7 +970,7 @@
       "fdcId": 169704,
       "description": "Rice, brown, long-grain, cooked",
       "dataType": "SR Legacy",
-      "category": "GRAINS",
+      "category": "GRAINS_CEREALS",
       "nutrients": {
         "kcal": 111,
         "protein_g": 2.59,
@@ -1018,7 +1018,7 @@
       "fdcId": 168917,
       "description": "Pasta, cooked, enriched",
       "dataType": "SR Legacy",
-      "category": "GRAINS",
+      "category": "GRAINS_CEREALS",
       "nutrients": {
         "kcal": 158,
         "protein_g": 5.77,
@@ -1066,7 +1066,7 @@
       "fdcId": 168916,
       "description": "Pasta, dry, enriched",
       "dataType": "SR Legacy",
-      "category": "GRAINS",
+      "category": "GRAINS_CEREALS",
       "nutrients": {
         "kcal": 371,
         "protein_g": 13.00,
@@ -1114,7 +1114,7 @@
       "fdcId": 168013,
       "description": "Bread, whole-wheat",
       "dataType": "SR Legacy",
-      "category": "GRAINS",
+      "category": "GRAINS_CEREALS",
       "nutrients": {
         "kcal": 247,
         "protein_g": 8.24,
@@ -1162,7 +1162,7 @@
       "fdcId": 168012,
       "description": "Bagel, plain",
       "dataType": "SR Legacy",
-      "category": "GRAINS",
+      "category": "GRAINS_CEREALS",
       "nutrients": {
         "kcal": 274,
         "protein_g": 10.50,
@@ -1210,7 +1210,7 @@
       "fdcId": 168917,
       "description": "Quinoa, cooked",
       "dataType": "SR Legacy",
-      "category": "GRAINS",
+      "category": "GRAINS_CEREALS",
       "nutrients": {
         "kcal": 120,
         "protein_g": 4.40,
@@ -2314,7 +2314,7 @@
       "fdcId": 171413,
       "description": "Oil, olive, salad or cooking",
       "dataType": "SR Legacy",
-      "category": "FATS_OILS",
+      "category": "OILS_FATS",
       "nutrients": {
         "kcal": 884,
         "protein_g": 0,
@@ -2362,7 +2362,7 @@
       "fdcId": 171412,
       "description": "Oil, coconut",
       "dataType": "SR Legacy",
-      "category": "FATS_OILS",
+      "category": "OILS_FATS",
       "nutrients": {
         "kcal": 884,
         "protein_g": 0,
@@ -2410,7 +2410,7 @@
       "fdcId": 173430,
       "description": "Butter, salted",
       "dataType": "SR Legacy",
-      "category": "FATS_OILS",
+      "category": "OILS_FATS",
       "nutrients": {
         "kcal": 717,
         "protein_g": 0.85,
@@ -2458,7 +2458,7 @@
       "fdcId": 169640,
       "description": "Honey",
       "dataType": "SR Legacy",
-      "category": "OTHER",
+      "category": "CONDIMENTS",
       "nutrients": {
         "kcal": 304,
         "protein_g": 0.30,
@@ -2506,7 +2506,7 @@
       "fdcId": 174285,
       "description": "Granola, homemade",
       "dataType": "SR Legacy",
-      "category": "CEREALS",
+      "category": "GRAINS_CEREALS",
       "nutrients": {
         "kcal": 471,
         "protein_g": 10.30,

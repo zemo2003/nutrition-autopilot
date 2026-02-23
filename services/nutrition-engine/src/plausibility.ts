@@ -96,9 +96,15 @@ function validateCalorieConsistency(
   // because USDA uses bomb calorimetry which accounts for indigestible fiber.
   // Fiber contributes ~4 kcal/g to Atwater but only ~2 kcal/g metabolizable energy.
   // Use wider tolerance when fiber is a large fraction of total carbs.
+  //
+  // TOLERANCE ALIGNMENT (SR-5):
+  // - Data quality check (this function): 20% base, 35% for high-fiber
+  // - FDA label check (engine.ts):        20% base, 35% for high-fiber (FDA Class I)
+  // Both now use the same thresholds. The previous 15% base here was overly strict
+  // for raw ingredient data which has more measurement variance than finished labels.
   const fiberRatio = carb > 0 ? fiber / carb : 0;
   const isLowCalFood = kcal < 60; // vegetables, leafy greens
-  const tolerancePct = (fiberRatio > 0.3 || isLowCalFood) ? 0.35 : 0.15;
+  const tolerancePct = (fiberRatio > 0.3 || isLowCalFood) ? 0.35 : 0.20;
 
   const tolerance = Math.max(calculatedKcal * tolerancePct, 10); // minimum 10 kcal absolute tolerance
   const difference = Math.abs(kcal - calculatedKcal);
@@ -508,6 +514,36 @@ function validateCategoryRules(
 }
 
 /**
+ * Natural sweetener validation: honey, maple syrup, agave nectar, etc.
+ * Per FDA guidance (81 FR 33742), sugars in pure natural sweeteners
+ * are intrinsic, NOT "added sugars."
+ */
+function validateNaturalSweeteners(
+  nutrients: Partial<Record<NutrientKey, number>>,
+  productName: string
+): PlausibilityIssue[] {
+  const issues: PlausibilityIssue[] = [];
+  const name = productName.toLowerCase();
+
+  const naturalSweetenerPattern = /\b(honey|maple syrup|agave|molasses|date syrup)\b/i;
+  if (naturalSweetenerPattern.test(name)) {
+    const addedSugars = nutrients.added_sugars_g;
+    if (addedSugars !== undefined && addedSugars > 0) {
+      issues.push({
+        nutrientKey: "added_sugars_g",
+        value: addedSugars,
+        rule: "Natural Sweetener Added Sugars",
+        severity: "ERROR",
+        message: `${productName} is a natural sweetener — added_sugars_g should be 0 per FDA guidance (81 FR 33742), but found ${addedSugars}g. All sugars in pure natural sweeteners are intrinsic.`,
+        suggestedRange: { min: 0, max: 0 },
+      });
+    }
+  }
+
+  return issues;
+}
+
+/**
  * Main validation function: validates a nutrient profile against plausibility rules
  */
 export function validateNutrientProfile(
@@ -522,6 +558,9 @@ export function validateNutrientProfile(
 
   // Apply category-specific rules
   issues.push(...validateCategoryRules(nutrients, category));
+
+  // Apply natural sweetener rules (P2 addendum from audit)
+  issues.push(...validateNaturalSweeteners(nutrients, productName));
 
   return issues;
 }
