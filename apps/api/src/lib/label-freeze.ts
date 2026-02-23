@@ -6,7 +6,7 @@ import {
   VerificationStatus,
   prisma
 } from "@nutrition/db";
-import { computeSkuLabel, type NutrientMap, validateFoodProduct, type PlausibilityIssue } from "@nutrition/nutrition-engine";
+import { computeSkuLabel, type NutrientMap, validateFoodProduct, type PlausibilityIssue, detectNutrientProfileState } from "@nutrition/nutrition-engine";
 import { servedAtFromSchedule } from "./served-time.js";
 
 const inferredEvidenceGrades = new Set<NutrientEvidenceGrade>([
@@ -530,22 +530,36 @@ export async function freezeLabelFromScheduleDone(input: {
       skuName: schedule.sku.name,
       recipeName: recipe.name,
       servings: schedule.plannedServings,
-      lines: recipe.lines.map((line) => ({
-        lineId: line.id,
-        ingredientName: line.ingredient.name,
-        ingredientAllergens: line.ingredient.allergenTags,
-        gramsPerServing: line.targetGPerServing,
-        preparation: line.preparation,
-        preparedState: (line as any).preparedState ?? "RAW",
-        yieldFactor: (line as any).yieldFactor ?? 1.0
-      })),
+      lines: recipe.lines.map((line) => {
+        // Infer preparedState from the preparation text when DB still defaults to RAW
+        const dbState = (line as any).preparedState as string | undefined;
+        let preparedState = dbState ?? "RAW";
+        if (preparedState === "RAW" && line.preparation) {
+          const prep = line.preparation.toUpperCase();
+          if (prep === "COOKED" || prep.includes("COOKED") || prep.includes("DRAINED")) {
+            preparedState = "COOKED";
+          } else if (prep === "DRY" || prep === "DRIED") {
+            preparedState = "DRY";
+          }
+        }
+        return {
+          lineId: line.id,
+          ingredientName: line.ingredient.name,
+          ingredientAllergens: line.ingredient.allergenTags,
+          gramsPerServing: line.targetGPerServing,
+          preparation: line.preparation,
+          preparedState,
+          yieldFactor: (line as any).yieldFactor ?? 1.0
+        };
+      }),
       consumedLots: consumedLots.map((lot) => ({
         recipeLineId: lot.recipeLineId,
         lotId: lot.lotId,
         productId: lot.productId,
         productName: lot.productName,
         gramsConsumed: lot.gramsConsumed,
-        nutrientsPer100g: lot.nutrientsPer100g
+        nutrientsPer100g: lot.nutrientsPer100g,
+        nutrientProfileState: detectNutrientProfileState(lot.productName)
       })),
       provisional: skuEvidence.summary.provisional,
       evidenceSummary: {
