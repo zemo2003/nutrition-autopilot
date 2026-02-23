@@ -35,6 +35,10 @@ type LabelPayload = {
     delta?: number;
     pass?: boolean;
   };
+  perServing?: Record<string, number>;
+  nutrientsPerServing?: Record<string, number>;
+  nutrientsPer100g?: Record<string, number>;
+  nutrientsTotal?: Record<string, number>;
 };
 
 type LineageNode = {
@@ -43,6 +47,94 @@ type LineageNode = {
   title: string;
   children?: LineageNode[];
 };
+
+const nutrientOrder = [
+  "kcal",
+  "protein_g",
+  "carb_g",
+  "fat_g",
+  "fiber_g",
+  "sugars_g",
+  "added_sugars_g",
+  "sat_fat_g",
+  "trans_fat_g",
+  "cholesterol_mg",
+  "sodium_mg",
+  "vitamin_d_mcg",
+  "calcium_mg",
+  "iron_mg",
+  "potassium_mg",
+  "vitamin_a_mcg",
+  "vitamin_c_mg",
+  "vitamin_e_mg",
+  "vitamin_k_mcg",
+  "thiamin_mg",
+  "riboflavin_mg",
+  "niacin_mg",
+  "vitamin_b6_mg",
+  "folate_mcg",
+  "vitamin_b12_mcg",
+  "biotin_mcg",
+  "pantothenic_acid_mg",
+  "phosphorus_mg",
+  "iodine_mcg",
+  "magnesium_mg",
+  "zinc_mg",
+  "selenium_mcg",
+  "copper_mg",
+  "manganese_mg",
+  "chromium_mcg",
+  "molybdenum_mcg",
+  "chloride_mg",
+  "choline_mg",
+  "omega3_g",
+  "omega6_g",
+] as const;
+
+function resolveNutrientDataset(payload: LabelPayload):
+  | { label: string; values: Record<string, number> }
+  | null {
+  if (payload.perServing) return { label: "Per Serving", values: payload.perServing };
+  if (payload.nutrientsPerServing) return { label: "Per Serving", values: payload.nutrientsPerServing };
+  if (payload.nutrientsPer100g) return { label: "Per 100g", values: payload.nutrientsPer100g };
+  if (payload.nutrientsTotal) return { label: "Total Consumed", values: payload.nutrientsTotal };
+  return null;
+}
+
+function nutrientLabel(key: string): string {
+  return key
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (x) => x.toUpperCase())
+    .replace("Mcg", "mcg")
+    .replace("Mg", "mg")
+    .replace("G", "g")
+    .replace("Kcal", "kcal");
+}
+
+function nutrientUnit(key: string): string {
+  if (key === "kcal") return "kcal";
+  if (key.endsWith("_mg")) return "mg";
+  if (key.endsWith("_mcg")) return "mcg";
+  if (key.endsWith("_g")) return "g";
+  return "";
+}
+
+function formatNutrientValue(value: number): string {
+  if (Math.abs(value) >= 100) return value.toFixed(1);
+  if (Math.abs(value) >= 10) return value.toFixed(2);
+  return value.toFixed(3);
+}
+
+function orderedNutrients(values: Record<string, number>): Array<{ key: string; value: number }> {
+  const ordered = nutrientOrder
+    .filter((key) => typeof values[key] === "number" && Number.isFinite(values[key]!))
+    .map((key) => ({ key, value: values[key]! }));
+  const extras = Object.entries(values)
+    .filter(([key, value]) => !nutrientOrder.includes(key as any) && typeof value === "number" && Number.isFinite(value))
+    .map(([key, value]) => ({ key, value: value as number }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+  return [...ordered, ...extras];
+}
 
 async function getLabel(labelId: string) {
   const response = await fetch(`${API_BASE}/v1/labels/${labelId}`, { cache: "no-store" });
@@ -100,6 +192,8 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
   const provisional = Boolean(label.provisional ?? payload.provisional ?? evidence?.provisional);
   const reasonCodes = payload.reasonCodes ?? [];
   const r = payload.roundedFda ?? {};
+  const nutrientDataset = resolveNutrientDataset(payload);
+  const nutrients = nutrientDataset ? orderedNutrients(nutrientDataset.values) : [];
 
   return (
     <div className="page-shell">
@@ -210,6 +304,26 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
                     <span className="val">{r.proteinG ?? 0}g</span>
                   </div>
                 </>
+              ) : nutrientDataset ? (
+                <div style={{ padding: "var(--sp-4)" }}>
+                  <p className="label-text" style={{ marginBottom: "var(--sp-3)" }}>
+                    Full Nutrient Profile ({nutrientDataset.label})
+                  </p>
+                  <div style={{ maxHeight: 520, overflow: "auto", border: "1px solid var(--line-soft)", borderRadius: 10 }}>
+                    {nutrients.map((row) => (
+                      <div
+                        key={row.key}
+                        className="nutrition-row"
+                        style={{ display: "flex", justifyContent: "space-between", gap: 12 }}
+                      >
+                        <span>{nutrientLabel(row.key)}</span>
+                        <span className="val">
+                          {formatNutrientValue(row.value)} {nutrientUnit(row.key)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               ) : (
                 <div style={{ padding: "var(--sp-6)", textAlign: "center" }}>
                   <span className="label-text">No FDA nutrition data for this label type.</span>
