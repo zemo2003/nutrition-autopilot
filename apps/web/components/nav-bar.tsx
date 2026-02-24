@@ -101,6 +101,13 @@ export function NavBar() {
         </div>
       </nav>
 
+      {mobileOpen && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 98 }}
+          onClick={() => setMobileOpen(false)}
+          aria-hidden="true"
+        />
+      )}
       <div className={`mobile-menu ${mobileOpen ? "open" : ""}`}>
         {NAV_LINKS.map((link) => (
           <Link

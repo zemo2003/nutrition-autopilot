@@ -752,7 +752,7 @@ export async function freezeLabelFromScheduleDone(input: {
     });
 
     return { mealServiceEventId: serviceEvent.id, labelSnapshotId: skuLabel.id };
-  });
+  }, { timeout: 60000 });
 }
 
 type LineageNode = {

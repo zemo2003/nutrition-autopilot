@@ -931,12 +931,36 @@ pre {
   .page-title { font-size: var(--text-xl); }
   .kpi-grid { grid-template-columns: repeat(2, 1fr); }
   .topnav-links { display: none; }
-  .mobile-menu-btn { display: flex; }
+  .mobile-menu-btn { display: flex; min-height: 44px; min-width: 44px; align-items: center; justify-content: center; }
   .qa-block { flex-direction: column; }
-  .meal-card { flex-direction: column; align-items: flex-start; }
-  .meal-actions { width: 100%; }
   .grid-two { grid-template-columns: 1fr; }
   .calendar-header-stats { flex-wrap: wrap; }
+
+  /* Chef touch targets */
+  * { -webkit-tap-highlight-color: transparent; }
+  .btn-sm {
+    padding: 12px 20px;
+    font-size: var(--text-base);
+    border-radius: var(--r-md);
+    min-height: 48px;
+  }
+  .meal-card {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: var(--sp-4);
+    margin-bottom: var(--sp-3);
+    gap: var(--sp-3);
+  }
+  .meal-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-2);
+    width: 100%;
+  }
+  .meal-actions .btn { width: 100%; justify-content: center; }
+  .meal-name { font-size: var(--text-md); white-space: normal; }
+  .meal-time { font-size: var(--text-sm); margin-top: var(--sp-1); }
+  button:active { transform: scale(0.96); }
 }
 
 @media (max-width: 480px) {
@@ -949,6 +973,24 @@ pre {
 .meal-card[data-status="done"]    { border-left: 3px solid var(--c-success); opacity: 0.75; }
 .meal-card[data-status="skipped"] { opacity: 0.45; border-left: 3px solid var(--c-border); }
 .meal-card[data-status="skipped"] .meal-name { text-decoration: line-through; }
+
+/* ── PWA Standalone + Safe Areas ────────────────────── */
+@media (display-mode: standalone) {
+  .topnav {
+    padding-top: env(safe-area-inset-top);
+    height: calc(var(--nav-height) + env(safe-area-inset-top));
+  }
+  .mobile-menu {
+    top: calc(var(--nav-height) + env(safe-area-inset-top));
+  }
+  .page-shell {
+    padding-bottom: calc(var(--sp-16) + env(safe-area-inset-bottom));
+  }
+  .topnav-inner {
+    padding-left: max(var(--page-gutter), env(safe-area-inset-left));
+    padding-right: max(var(--page-gutter), env(safe-area-inset-right));
+  }
+}
 
 /* ── Print Media ────────────────────────────────────── */
 @media print {
