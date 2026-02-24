@@ -889,7 +889,20 @@ v1Router.get("/schedules", async (req, res) => {
         : {}),
     },
     include: {
-      sku: true,
+      sku: {
+        include: {
+          recipes: {
+            where: { active: true },
+            take: 1,
+            include: {
+              lines: {
+                include: { ingredient: true },
+                orderBy: { lineOrder: "asc" },
+              },
+            },
+          },
+        },
+      },
       client: true,
       serviceEvent: {
         select: { id: true, finalLabelSnapshotId: true },
@@ -899,20 +912,32 @@ v1Router.get("/schedules", async (req, res) => {
   });
 
   return res.json({
-    schedules: schedules.map((s) => ({
-      id: s.id,
-      clientId: s.clientId,
-      clientName: s.client.fullName,
-      skuId: s.skuId,
-      skuName: s.sku.name,
-      skuCode: s.sku.code,
-      serviceDate: s.serviceDate.toISOString().slice(0, 10),
-      mealSlot: s.mealSlot,
-      status: s.status,
-      plannedServings: s.plannedServings,
-      serviceEventId: s.serviceEvent?.id ?? null,
-      finalLabelSnapshotId: s.serviceEvent?.finalLabelSnapshotId ?? null,
-    })),
+    schedules: schedules.map((s) => {
+      const recipe = s.sku.recipes[0];
+      return {
+        id: s.id,
+        clientId: s.clientId,
+        clientName: s.client.fullName,
+        skuId: s.skuId,
+        skuName: s.sku.name,
+        skuCode: s.sku.code,
+        servingSizeG: s.sku.servingSizeG ?? null,
+        serviceDate: s.serviceDate.toISOString().slice(0, 10),
+        mealSlot: s.mealSlot,
+        status: s.status,
+        plannedServings: s.plannedServings,
+        serviceEventId: s.serviceEvent?.id ?? null,
+        finalLabelSnapshotId: s.serviceEvent?.finalLabelSnapshotId ?? null,
+        recipeLines: recipe
+          ? recipe.lines.map((l) => ({
+              ingredientName: l.ingredient.name,
+              category: l.ingredient.category.toLowerCase(),
+              gramsPerServing: l.targetGPerServing,
+              preparation: l.preparation,
+            }))
+          : [],
+      };
+    }),
   });
 });
 

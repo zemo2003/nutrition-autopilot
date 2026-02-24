@@ -10,6 +10,13 @@ function resolveApiBase() {
   return "http://localhost:4000";
 }
 
+type RecipeLine = {
+  ingredientName: string;
+  category: string;
+  gramsPerServing: number;
+  preparation: string | null;
+};
+
 type ScheduleItem = {
   id: string;
   clientId: string;
@@ -17,12 +24,14 @@ type ScheduleItem = {
   skuId: string;
   skuName: string;
   skuCode: string;
+  servingSizeG: number | null;
   serviceDate: string;
   mealSlot: string;
   status: string;
   plannedServings: number;
   serviceEventId: string | null;
   finalLabelSnapshotId: string | null;
+  recipeLines: RecipeLine[];
 };
 
 function formatDayLabel(dateStr: string): string {
@@ -45,6 +54,98 @@ function slotClass(slot?: string): string {
   return "meal-slot meal-slot-snack";
 }
 
+// Group categories for chef-friendly display order
+const CATEGORY_ORDER = ["protein", "vegetable", "grain", "fruit", "dairy", "fat", "condiment", "other", "unmapped"];
+const CATEGORY_LABELS: Record<string, string> = {
+  protein: "Protein",
+  vegetable: "Vegetables & Carbs",
+  grain: "Grains",
+  fruit: "Fruit",
+  dairy: "Dairy",
+  fat: "Fats & Oils",
+  condiment: "Condiments",
+  other: "Other",
+  unmapped: "Other",
+};
+
+function groupByCategory(lines: RecipeLine[]): Array<{ category: string; label: string; items: RecipeLine[] }> {
+  const map = new Map<string, RecipeLine[]>();
+  for (const line of lines) {
+    const cat = line.category || "other";
+    if (!map.has(cat)) map.set(cat, []);
+    map.get(cat)!.push(line);
+  }
+  return CATEGORY_ORDER
+    .filter((cat) => map.has(cat))
+    .map((cat) => ({
+      category: cat,
+      label: CATEGORY_LABELS[cat] ?? cat,
+      items: map.get(cat)!,
+    }));
+}
+
+function RecipeBreakdown({ lines, servings }: { lines: RecipeLine[]; servings: number }) {
+  if (lines.length === 0) return null;
+  const groups = groupByCategory(lines);
+  const totalG = lines.reduce((s, l) => s + l.gramsPerServing, 0) * servings;
+
+  return (
+    <div style={{ width: "100%", marginTop: 8, borderTop: "1px solid var(--c-border-light)", paddingTop: 8 }}>
+      {groups.map((group) => (
+        <div key={group.category} style={{ marginBottom: 6 }}>
+          <div style={{
+            fontSize: "var(--text-xs)",
+            fontWeight: 600,
+            color: "var(--c-ink-muted)",
+            textTransform: "uppercase",
+            letterSpacing: "0.05em",
+            marginBottom: 2,
+          }}>
+            {group.label}
+          </div>
+          {group.items.map((line, idx) => (
+            <div
+              key={idx}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                fontSize: "var(--text-sm)",
+                padding: "2px 0",
+                gap: 8,
+              }}
+            >
+              <span style={{ color: "var(--c-ink-soft)" }}>
+                {line.ingredientName}
+                {line.preparation ? (
+                  <span style={{ fontSize: "var(--text-xs)", color: "var(--c-ink-muted)", marginLeft: 4 }}>
+                    ({line.preparation})
+                  </span>
+                ) : null}
+              </span>
+              <span style={{ fontWeight: 600, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+                {(line.gramsPerServing * servings).toFixed(0)}g
+              </span>
+            </div>
+          ))}
+        </div>
+      ))}
+      <div style={{
+        display: "flex",
+        justifyContent: "space-between",
+        borderTop: "1px solid var(--c-border-light)",
+        paddingTop: 4,
+        marginTop: 4,
+        fontSize: "var(--text-sm)",
+        fontWeight: 600,
+      }}>
+        <span>Total</span>
+        <span>{totalG.toFixed(0)}g</span>
+      </div>
+    </div>
+  );
+}
+
 export function ScheduleBoard({
   initialSchedules,
   sortedDays,
@@ -57,6 +158,7 @@ export function ScheduleBoard({
   const [schedules, setSchedules] = useState<ScheduleItem[]>(initialSchedules);
   const [loading, setLoading] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const grouped: Record<string, ScheduleItem[]> = {};
   for (const s of schedules) {
@@ -64,6 +166,10 @@ export function ScheduleBoard({
     if (!grouped[day]) grouped[day] = [];
     grouped[day]!.push(s);
   }
+
+  const toggleExpand = useCallback((id: string) => {
+    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
+  }, []);
 
   const handleAction = useCallback(
     async (scheduleId: string, action: "DONE" | "SKIPPED") => {
@@ -125,44 +231,65 @@ export function ScheduleBoard({
               <div
                 key={schedule.id}
                 className="meal-card"
+                style={{ flexDirection: "column", alignItems: "stretch" }}
               >
-                <div className="meal-info">
-                  <div className="meal-name">{schedule.skuName}</div>
-                  <div className="meal-time">
-                    {schedule.clientName}
-                    {schedule.mealSlot && (
-                      <>
-                        {" \u00b7 "}
-                        <span className={slotClass(schedule.mealSlot)}>
-                          {schedule.mealSlot}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div
+                    className="meal-info"
+                    style={{ cursor: schedule.recipeLines.length > 0 ? "pointer" : undefined }}
+                    onClick={() => schedule.recipeLines.length > 0 && toggleExpand(schedule.id)}
+                  >
+                    <div className="meal-name">
+                      {schedule.recipeLines.length > 0 && (
+                        <span style={{ display: "inline-block", width: 16, fontSize: "var(--text-xs)", color: "var(--c-ink-muted)" }}>
+                          {expanded[schedule.id] ? "\u25BC" : "\u25B6"}
                         </span>
-                      </>
-                    )}
-                    {schedule.plannedServings !== 1 && (
-                      <>
-                        {" \u00b7 "}
-                        <span>{schedule.plannedServings} servings</span>
-                      </>
-                    )}
+                      )}
+                      {schedule.skuName}
+                    </div>
+                    <div className="meal-time">
+                      {schedule.clientName}
+                      {schedule.mealSlot && (
+                        <>
+                          {" \u00b7 "}
+                          <span className={slotClass(schedule.mealSlot)}>
+                            {schedule.mealSlot}
+                          </span>
+                        </>
+                      )}
+                      {schedule.plannedServings !== 1 && (
+                        <>
+                          {" \u00b7 "}
+                          <span>{schedule.plannedServings} servings</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="meal-actions">
+                    <button
+                      className="btn btn-primary btn-sm"
+                      disabled={!!loading[schedule.id]}
+                      onClick={() => handleAction(schedule.id, "DONE")}
+                    >
+                      {loading[schedule.id] === "DONE" ? "Freezing..." : "Fed"}
+                    </button>
+                    <button
+                      className="btn btn-outline btn-sm"
+                      disabled={!!loading[schedule.id]}
+                      onClick={() => handleAction(schedule.id, "SKIPPED")}
+                    >
+                      {loading[schedule.id] === "SKIPPED" ? "..." : "Skip"}
+                    </button>
                   </div>
                 </div>
 
-                <div className="meal-actions">
-                  <button
-                    className="btn btn-primary btn-sm"
-                    disabled={!!loading[schedule.id]}
-                    onClick={() => handleAction(schedule.id, "DONE")}
-                  >
-                    {loading[schedule.id] === "DONE" ? "Freezing..." : "Fed"}
-                  </button>
-                  <button
-                    className="btn btn-outline btn-sm"
-                    disabled={!!loading[schedule.id]}
-                    onClick={() => handleAction(schedule.id, "SKIPPED")}
-                  >
-                    {loading[schedule.id] === "SKIPPED" ? "..." : "Skip"}
-                  </button>
-                </div>
+                {expanded[schedule.id] && schedule.recipeLines.length > 0 && (
+                  <RecipeBreakdown
+                    lines={schedule.recipeLines}
+                    servings={schedule.plannedServings}
+                  />
+                )}
 
                 {errors[schedule.id] && (
                   <div

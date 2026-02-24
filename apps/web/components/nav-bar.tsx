@@ -64,7 +64,6 @@ export function NavBar() {
       <nav className="topnav">
         <div className="topnav-inner">
           <Link href="/" className="topnav-brand">
-            <span className="topnav-brand-icon">N</span>
             <span>Numen</span>
           </Link>
 

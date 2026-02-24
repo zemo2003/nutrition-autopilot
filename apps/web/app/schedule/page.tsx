@@ -3,6 +3,13 @@ import { ScheduleBoard } from "../../components/schedule-actions";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:4000";
 
+type RecipeLine = {
+  ingredientName: string;
+  category: string;
+  gramsPerServing: number;
+  preparation: string | null;
+};
+
 type ScheduleItem = {
   id: string;
   clientId: string;
@@ -10,12 +17,14 @@ type ScheduleItem = {
   skuId: string;
   skuName: string;
   skuCode: string;
+  servingSizeG: number | null;
   serviceDate: string;
   mealSlot: string;
   status: string;
   plannedServings: number;
   serviceEventId: string | null;
   finalLabelSnapshotId: string | null;
+  recipeLines: RecipeLine[];
 };
 
 async function getSchedules(): Promise<ScheduleItem[]> {
