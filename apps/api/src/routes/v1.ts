@@ -155,7 +155,8 @@ v1Router.post("/imports/sot", upload.single("file"), async (req, res) => {
       summary: {
         skus: parsed.skus.length,
         recipeLines: parsed.recipeLines.length,
-        ingredients: parsed.ingredients.length
+        ingredients: parsed.ingredients.length,
+        weeklySchedule: parsed.weeklySchedule.length
       },
       createdBy: user.email
     }
@@ -281,6 +282,76 @@ v1Router.post("/imports/sot", upload.single("file"), async (req, res) => {
         }
       }
 
+      // Create PLANNED schedules from Weekly_Schedule sheet
+      let schedulesCreated = 0;
+      let schedulesSkipped = 0;
+      if (parsed.weeklySchedule.length > 0) {
+        // Resolve/create clients by name
+        const clientIdByName = new Map<string, string>();
+        for (const entry of parsed.weeklySchedule) {
+          if (clientIdByName.has(entry.clientName)) continue;
+          const existing = await tx.client.findFirst({
+            where: { organizationId: org.id, fullName: entry.clientName },
+          });
+          if (existing) {
+            clientIdByName.set(entry.clientName, existing.id);
+          } else {
+            const created = await tx.client.create({
+              data: {
+                organizationId: org.id,
+                fullName: entry.clientName,
+                externalRef: entry.clientName.toUpperCase().replace(/[^A-Z0-9]+/g, "-"),
+                createdBy: user.email,
+              },
+            });
+            clientIdByName.set(entry.clientName, created.id);
+            createdCount += 1;
+          }
+        }
+
+        for (const entry of parsed.weeklySchedule) {
+          const sku = await tx.sku.findFirst({
+            where: { organizationId: org.id, code: entry.skuCode },
+          });
+          if (!sku) continue; // Already validated by parser
+
+          const clientId = clientIdByName.get(entry.clientName);
+          if (!clientId) continue;
+
+          const serviceDate = parseDateOnlyUtc(entry.serviceDate);
+
+          // Dedup: skip if identical schedule already exists
+          const dup = await tx.mealSchedule.findFirst({
+            where: {
+              organizationId: org.id,
+              clientId,
+              skuId: sku.id,
+              serviceDate,
+              mealSlot: entry.mealSlot,
+            },
+          });
+          if (dup) {
+            schedulesSkipped += 1;
+            continue;
+          }
+
+          await tx.mealSchedule.create({
+            data: {
+              organizationId: org.id,
+              clientId,
+              skuId: sku.id,
+              serviceDate,
+              mealSlot: entry.mealSlot,
+              plannedServings: entry.servings,
+              status: "PLANNED",
+              createdBy: user.email,
+            },
+          });
+          schedulesCreated += 1;
+          createdCount += 1;
+        }
+      }
+
       await tx.importJob.update({
         where: { id: job.id },
         data: {
@@ -289,6 +360,8 @@ v1Router.post("/imports/sot", upload.single("file"), async (req, res) => {
             ...(job.summary as object),
             createdCount,
             updatedCount,
+            schedulesCreated,
+            schedulesSkipped,
             errors: parsed.errors.length
           }
         }

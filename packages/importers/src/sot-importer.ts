@@ -1,7 +1,7 @@
 import path from "node:path";
 import XLSX from "xlsx";
 import { z } from "zod";
-import type { IngredientCatalogRow, RecipeLineRow, SkuMasterRow, SOTParseResult, ValidationError } from "./types.js";
+import type { IngredientCatalogRow, RecipeLineRow, SkuMasterRow, WeeklyScheduleRow, SOTParseResult, ValidationError } from "./types.js";
 
 const skuSchema = z.object({
   sku_code: z.string().min(1),
@@ -28,6 +28,14 @@ const ingredientSchema = z.object({
   category: z.string().min(1),
   default_unit: z.enum(["g", "ml", "oz"]),
   allergen_tags_pipe_delimited: z.string().optional()
+});
+
+const weeklyScheduleSchema = z.object({
+  service_date: z.string().min(1),
+  meal_slot: z.string().min(1),
+  sku_code: z.string().min(1),
+  servings: z.coerce.number().positive(),
+  client_name: z.string().min(1)
 });
 
 function parseRequiredSheet(wb: XLSX.WorkBook, name: string, errors: ValidationError[]) {
@@ -124,7 +132,45 @@ export function parseSotWorkbook(filePath: string): SOTParseResult {
     });
   });
 
+  // Weekly_Schedule is optional — silently skip if missing
+  const weeklySchedule: WeeklyScheduleRow[] = [];
+  const scheduleSheet = workbook.Sheets["Weekly_Schedule"];
+  if (scheduleSheet) {
+    const rawSchedule = XLSX.utils.sheet_to_json<Record<string, unknown>>(scheduleSheet, { defval: "" });
+    rawSchedule.forEach((row, idx) => {
+      const parsed = weeklyScheduleSchema.safeParse(row);
+      if (!parsed.success) {
+        errors.push({
+          sheet: "Weekly_Schedule",
+          rowNumber: idx + 2,
+          code: "INVALID_ROW",
+          message: parsed.error.issues.map((i) => i.message).join("; ")
+        });
+        return;
+      }
+      // Normalize service_date to YYYY-MM-DD string
+      const dateStr = normalizeServiceDate(parsed.data.service_date);
+      if (!dateStr) {
+        errors.push({
+          sheet: "Weekly_Schedule",
+          rowNumber: idx + 2,
+          code: "INVALID_SERVICE_DATE",
+          message: `Cannot parse service_date: ${parsed.data.service_date}`
+        });
+        return;
+      }
+      weeklySchedule.push({
+        serviceDate: dateStr,
+        mealSlot: parsed.data.meal_slot.trim().toUpperCase(),
+        skuCode: parsed.data.sku_code.trim(),
+        servings: parsed.data.servings,
+        clientName: parsed.data.client_name.trim()
+      });
+    });
+  }
+
   const ingredientKeySet = new Set(ingredients.map((x) => x.ingredientKey));
+  const skuCodeSet = new Set(skus.map((x) => x.skuCode));
   const skuRecipeKeySet = new Set(skus.map((x) => `${x.skuCode}::${x.recipeName}`));
 
   const duplicateSkuKeys = findDuplicates(skus.map((x) => x.skuCode));
@@ -176,10 +222,22 @@ export function parseSotWorkbook(filePath: string): SOTParseResult {
     }
   });
 
+  weeklySchedule.forEach((entry, idx) => {
+    if (!skuCodeSet.has(entry.skuCode)) {
+      errors.push({
+        sheet: "Weekly_Schedule",
+        rowNumber: idx + 2,
+        code: "UNKNOWN_SKU_CODE",
+        message: `sku_code ${entry.skuCode} not found in SKU_Master`
+      });
+    }
+  });
+
   return {
     skus,
     recipeLines,
     ingredients,
+    weeklySchedule,
     errors
   };
 }
@@ -192,4 +250,21 @@ function findDuplicates(values: string[]): string[] {
     seen.add(value);
   }
   return [...dupes];
+}
+
+/** Normalize various date formats to YYYY-MM-DD string */
+function normalizeServiceDate(input: string): string | null {
+  const trimmed = String(input).trim();
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  // Excel serial number (e.g. 46075)
+  const asNum = Number(trimmed);
+  if (Number.isFinite(asNum) && asNum > 40000 && asNum < 60000) {
+    const d = new Date(Date.UTC(1899, 11, 30 + asNum));
+    return d.toISOString().slice(0, 10);
+  }
+  // Try Date parsing as fallback
+  const d = new Date(trimmed);
+  if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  return null;
 }

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ScheduleBoard } from "../../components/schedule-actions";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:4000";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? process.env.API_BASE ?? "http://localhost:4000";
 
 type RecipeLine = {
   ingredientName: string;

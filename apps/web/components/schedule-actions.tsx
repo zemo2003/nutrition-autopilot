@@ -5,7 +5,11 @@ import { useState, useCallback } from "react";
 function resolveApiBase() {
   if (process.env.NEXT_PUBLIC_API_BASE) return process.env.NEXT_PUBLIC_API_BASE;
   if (typeof window !== "undefined") {
-    return `${window.location.protocol}//${window.location.hostname}:4000`;
+    const host = window.location.hostname;
+    if (host.includes("onrender.com")) {
+      return `${window.location.protocol}//${host.replace("-web", "-api")}`;
+    }
+    return `${window.location.protocol}//${host}:4000`;
   }
   return "http://localhost:4000";
 }

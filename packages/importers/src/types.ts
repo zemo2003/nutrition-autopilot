@@ -82,9 +82,18 @@ export type ValidationError = {
   message: string;
 };
 
+export type WeeklyScheduleRow = {
+  serviceDate: string;
+  mealSlot: string;
+  skuCode: string;
+  servings: number;
+  clientName: string;
+};
+
 export type SOTParseResult = {
   skus: SkuMasterRow[];
   recipeLines: RecipeLineRow[];
   ingredients: IngredientCatalogRow[];
+  weeklySchedule: WeeklyScheduleRow[];
   errors: ValidationError[];
 };
