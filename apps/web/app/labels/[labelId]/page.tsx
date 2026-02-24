@@ -121,6 +121,38 @@ function orderedNutrients(values: Record<string, number>): Array<{ key: string; 
     .map((key) => ({ key, value: values[key]! }));
 }
 
+// Category grouping for recipe breakdown (matches schedule page)
+const CATEGORY_ORDER = ["protein", "vegetable", "grain", "fruit", "dairy", "fat", "condiment", "other", "unmapped"];
+const CATEGORY_LABELS: Record<string, string> = {
+  protein: "Protein",
+  vegetable: "Vegetables & Carbs",
+  grain: "Grains",
+  fruit: "Fruit",
+  dairy: "Dairy",
+  fat: "Fats & Oils",
+  condiment: "Condiments",
+  other: "Other",
+  unmapped: "Other",
+};
+
+type RecipeLineItem = { ingredientName: string; category: string; gramsPerServing: number; preparation: string | null };
+
+function groupRecipeByCategory(lines: RecipeLineItem[]): Array<{ category: string; label: string; items: RecipeLineItem[] }> {
+  const map = new Map<string, RecipeLineItem[]>();
+  for (const line of lines) {
+    const cat = line.category || "other";
+    if (!map.has(cat)) map.set(cat, []);
+    map.get(cat)!.push(line);
+  }
+  return CATEGORY_ORDER
+    .filter((cat) => map.has(cat))
+    .map((cat) => ({
+      category: cat,
+      label: CATEGORY_LABELS[cat] ?? cat,
+      items: map.get(cat)!,
+    }));
+}
+
 async function getLabel(labelId: string) {
   const response = await fetch(`${API_BASE}/v1/labels/${labelId}`, { cache: "no-store" });
   if (!response.ok) return null;
@@ -158,6 +190,11 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
   const dv = payload.percentDV ?? {};
   const nutrientDataset = resolveNutrientDataset(payload);
   const nutrients = nutrientDataset ? orderedNutrients(nutrientDataset.values) : [];
+
+  // Recipe lines from SKU (returned by API alongside label)
+  const recipeLines: Array<{ ingredientName: string; category: string; gramsPerServing: number; preparation: string | null }> =
+    Array.isArray(label.recipeLines) ? label.recipeLines : [];
+  const recipeGroups = groupRecipeByCategory(recipeLines);
 
   return (
     <div className="page-shell">
@@ -309,22 +346,51 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
             </p>
           </div>
 
-          {payload.ingredientBreakdown?.length ? (
+          {recipeLines.length > 0 ? (
             <div className="card">
               <div className="card-header">
                 <h3>Recipe</h3>
                 <span className="badge badge-neutral">Per Serving</span>
               </div>
-              {payload.ingredientBreakdown.map((ing, idx) => (
-                <div
-                  key={idx}
-                  className="nutrition-row"
-                  style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--text-sm)" }}
-                >
-                  <span>{ing.ingredientName}</span>
-                  <span className="val">{ing.gramsPerServing.toFixed(1)}g</span>
+              {recipeGroups.map((group) => (
+                <div key={group.category} style={{ marginBottom: 8 }}>
+                  <div style={{
+                    fontSize: "var(--text-xs)",
+                    fontWeight: 600,
+                    color: "var(--c-ink-muted)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.05em",
+                    marginBottom: 2,
+                    padding: "0 var(--sp-3)",
+                  }}>
+                    {group.label}
+                  </div>
+                  {group.items.map((line, idx) => (
+                    <div
+                      key={idx}
+                      className="nutrition-row"
+                      style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--text-sm)" }}
+                    >
+                      <span>
+                        {line.ingredientName}
+                        {line.preparation ? (
+                          <span style={{ fontSize: "var(--text-xs)", color: "var(--c-ink-muted)", marginLeft: 4 }}>
+                            ({line.preparation})
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="val">{line.gramsPerServing.toFixed(1)}g</span>
+                    </div>
+                  ))}
                 </div>
               ))}
+              <div
+                className="nutrition-row"
+                style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--text-sm)", fontWeight: 600, borderTop: "2px solid var(--c-border-light)", marginTop: 4, paddingTop: 6 }}
+              >
+                <span>Total</span>
+                <span className="val">{recipeLines.reduce((s, l) => s + l.gramsPerServing, 0).toFixed(1)}g</span>
+              </div>
             </div>
           ) : null}
 
@@ -372,92 +438,6 @@ export default async function LabelPage({ params }: { params: Promise<{ labelId:
         </section>
       </div>
 
-      {payload.ingredientBreakdown?.length ? (
-        <section className="section mt-8">
-          <div className="card">
-            <div className="card-header">
-              <h3>Ingredient Breakdown</h3>
-              <span className="badge badge-neutral">Per Serving</span>
-            </div>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-sm)" }}>
-                <thead>
-                  <tr style={{ borderBottom: "2px solid var(--c-border-light)", textAlign: "left" }}>
-                    <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600 }}>Ingredient</th>
-                    <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600, textAlign: "right" }}>Grams</th>
-                    <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600, textAlign: "right" }}>% of Serving</th>
-                    <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600, textAlign: "right" }}>Calories</th>
-                    <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600, textAlign: "right" }}>Protein</th>
-                    <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600, textAlign: "right" }}>Carbs</th>
-                    <th style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 600, textAlign: "right" }}>Fat</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {payload.ingredientBreakdown.map((ing, idx) => (
-                    <tr key={idx} style={{ borderBottom: "1px solid var(--c-border-light)" }}>
-                      <td style={{ padding: "var(--sp-3) var(--sp-4)", fontWeight: 500 }}>{ing.ingredientName}</td>
-                      <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>{ing.gramsPerServing.toFixed(1)}g</td>
-                      <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>{ing.percentOfServing.toFixed(1)}%</td>
-                      <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>{ing.nutrientHighlights.kcal.toFixed(0)} kcal</td>
-                      <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>{ing.nutrientHighlights.protein_g.toFixed(1)}g</td>
-                      <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>{ing.nutrientHighlights.carb_g.toFixed(1)}g</td>
-                      <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>{ing.nutrientHighlights.fat_g.toFixed(1)}g</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr style={{ borderTop: "2px solid var(--c-border-light)", fontWeight: 600 }}>
-                    <td style={{ padding: "var(--sp-3) var(--sp-4)" }}>Total</td>
-                    <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>
-                      {payload.ingredientBreakdown.reduce((s, i) => s + i.gramsPerServing, 0).toFixed(1)}g
-                    </td>
-                    <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>100.0%</td>
-                    <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>
-                      {payload.ingredientBreakdown.reduce((s, i) => s + i.nutrientHighlights.kcal, 0).toFixed(0)} kcal
-                    </td>
-                    <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>
-                      {payload.ingredientBreakdown.reduce((s, i) => s + i.nutrientHighlights.protein_g, 0).toFixed(1)}g
-                    </td>
-                    <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>
-                      {payload.ingredientBreakdown.reduce((s, i) => s + i.nutrientHighlights.carb_g, 0).toFixed(1)}g
-                    </td>
-                    <td style={{ padding: "var(--sp-3) var(--sp-4)", textAlign: "right" }}>
-                      {payload.ingredientBreakdown.reduce((s, i) => s + i.nutrientHighlights.fat_g, 0).toFixed(1)}g
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-            <div style={{ padding: "var(--sp-4)", display: "flex", gap: 4, height: 32, borderRadius: 8, overflow: "hidden" }}>
-              {payload.ingredientBreakdown.map((ing, idx) => {
-                const colors = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"];
-                return (
-                  <div
-                    key={idx}
-                    style={{
-                      flex: ing.percentOfServing,
-                      backgroundColor: colors[idx % colors.length],
-                      borderRadius: 4,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      color: "white",
-                      fontSize: 11,
-                      fontWeight: 600,
-                      overflow: "hidden",
-                      whiteSpace: "nowrap",
-                      padding: "0 4px"
-                    }}
-                    title={`${ing.ingredientName}: ${ing.gramsPerServing.toFixed(1)}g (${ing.percentOfServing.toFixed(1)}%)`}
-                  >
-                    {ing.percentOfServing > 10 ? ing.ingredientName : ""}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </section>
-      ) : null}
 
     </div>
   );

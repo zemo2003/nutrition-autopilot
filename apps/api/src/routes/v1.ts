@@ -1243,12 +1243,35 @@ v1Router.get("/labels/:labelId", async (req, res) => {
   const supersededByLabelId =
     latestForEntity && latestForEntity.id !== label.id ? latestForEntity.id : null;
 
+  // Fetch recipe lines from the SKU for recipe breakdown display
+  let recipeLines: Array<{ ingredientName: string; category: string; gramsPerServing: number; preparation: string | null }> = [];
+  if (label.externalRefId) {
+    const recipe = await prisma.recipe.findFirst({
+      where: { skuId: label.externalRefId, active: true },
+      include: {
+        lines: {
+          include: { ingredient: true },
+          orderBy: { lineOrder: "asc" },
+        },
+      },
+    });
+    if (recipe) {
+      recipeLines = recipe.lines.map((l) => ({
+        ingredientName: l.ingredient.name,
+        category: l.ingredient.category.toLowerCase(),
+        gramsPerServing: l.targetGPerServing,
+        preparation: l.preparation,
+      }));
+    }
+  }
+
   return res.json({
     ...label,
     provisional,
     evidenceSummary,
     supersededByLabelId,
-    isLatest: supersededByLabelId === null
+    isLatest: supersededByLabelId === null,
+    recipeLines
   });
 });
 
