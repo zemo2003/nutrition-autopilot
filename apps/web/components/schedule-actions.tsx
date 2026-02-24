@@ -254,57 +254,54 @@ export function ScheduleBoard({
               <div
                 key={schedule.id}
                 className="meal-card"
-                style={{ flexDirection: "column", alignItems: "stretch" }}
               >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                  <div
-                    className="meal-info"
-                    style={{ cursor: schedule.recipeLines.length > 0 ? "pointer" : undefined }}
-                    onClick={() => schedule.recipeLines.length > 0 && toggleExpand(schedule.id)}
-                  >
-                    <div className="meal-name">
-                      {schedule.recipeLines.length > 0 && (
-                        <span style={{ display: "inline-block", width: 16, fontSize: "var(--text-xs)", color: "var(--c-ink-muted)" }}>
-                          {expanded[schedule.id] ? "\u25BC" : "\u25B6"}
+                <div
+                  className="meal-info"
+                  style={{ cursor: schedule.recipeLines.length > 0 ? "pointer" : undefined, flex: 1, minWidth: 0 }}
+                  onClick={() => schedule.recipeLines.length > 0 && toggleExpand(schedule.id)}
+                >
+                  <div className="meal-name">
+                    {schedule.recipeLines.length > 0 && (
+                      <span style={{ display: "inline-block", width: 16, fontSize: "var(--text-xs)", color: "var(--c-ink-muted)" }}>
+                        {expanded[schedule.id] ? "\u25BC" : "\u25B6"}
+                      </span>
+                    )}
+                    {schedule.skuName}
+                  </div>
+                  <div className="meal-time">
+                    {schedule.clientName}
+                    {schedule.mealSlot && (
+                      <>
+                        {" \u00b7 "}
+                        <span className={slotClass(schedule.mealSlot)}>
+                          {schedule.mealSlot}
                         </span>
-                      )}
-                      {schedule.skuName}
-                    </div>
-                    <div className="meal-time">
-                      {schedule.clientName}
-                      {schedule.mealSlot && (
-                        <>
-                          {" \u00b7 "}
-                          <span className={slotClass(schedule.mealSlot)}>
-                            {schedule.mealSlot}
-                          </span>
-                        </>
-                      )}
-                      {schedule.plannedServings !== 1 && (
-                        <>
-                          {" \u00b7 "}
-                          <span>{schedule.plannedServings} servings</span>
-                        </>
-                      )}
-                    </div>
+                      </>
+                    )}
+                    {schedule.plannedServings !== 1 && (
+                      <>
+                        {" \u00b7 "}
+                        <span>{schedule.plannedServings} servings</span>
+                      </>
+                    )}
                   </div>
+                </div>
 
-                  <div className="meal-actions">
-                    <button
-                      className="btn btn-primary btn-sm"
-                      disabled={!!loading[schedule.id]}
-                      onClick={() => handleAction(schedule.id, "DONE")}
-                    >
-                      {loading[schedule.id] === "DONE" ? "Freezing..." : "Fed"}
-                    </button>
-                    <button
-                      className="btn btn-outline btn-sm"
-                      disabled={!!loading[schedule.id]}
-                      onClick={() => handleAction(schedule.id, "SKIPPED")}
-                    >
-                      {loading[schedule.id] === "SKIPPED" ? "..." : "Skip"}
-                    </button>
-                  </div>
+                <div className="meal-actions">
+                  <button
+                    className="btn btn-primary btn-sm"
+                    disabled={!!loading[schedule.id]}
+                    onClick={() => handleAction(schedule.id, "DONE")}
+                  >
+                    {loading[schedule.id] === "DONE" ? "Freezing..." : "Fed"}
+                  </button>
+                  <button
+                    className="btn btn-outline btn-sm"
+                    disabled={!!loading[schedule.id]}
+                    onClick={() => handleAction(schedule.id, "SKIPPED")}
+                  >
+                    {loading[schedule.id] === "SKIPPED" ? "..." : "Skip"}
+                  </button>
                 </div>
 
                 {expanded[schedule.id] && schedule.recipeLines.length > 0 && (
