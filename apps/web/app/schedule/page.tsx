@@ -20,7 +20,7 @@ type ScheduleItem = {
 
 async function getSchedules(): Promise<ScheduleItem[]> {
   try {
-    const response = await fetch(`${API_BASE}/v1/schedules`, { cache: "no-store" });
+    const response = await fetch(`${API_BASE}/v1/schedules?status=PLANNED`, { cache: "no-store" });
     if (!response.ok) return [];
     const json = (await response.json()) as { schedules?: ScheduleItem[] };
     return json.schedules ?? [];
@@ -45,9 +45,6 @@ function isToday(dateStr: string): boolean {
 
 export default async function SchedulePage() {
   const schedules = await getSchedules();
-  const planned = schedules.filter((s) => s.status === "PLANNED").length;
-  const done = schedules.filter((s) => s.status === "DONE").length;
-  const skipped = schedules.filter((s) => s.status === "SKIPPED").length;
 
   // Group by date
   const grouped: Record<string, ScheduleItem[]> = {};
@@ -88,13 +85,7 @@ export default async function SchedulePage() {
       {schedules.length > 0 && (
         <div className="calendar-header-stats">
           <div className="calendar-stat">
-            <strong>{planned}</strong> planned
-          </div>
-          <div className="calendar-stat">
-            <strong>{done}</strong> served
-          </div>
-          <div className="calendar-stat">
-            <strong>{skipped}</strong> skipped
+            <strong>{schedules.length}</strong> meal{schedules.length !== 1 ? "s" : ""} remaining
           </div>
         </div>
       )}
@@ -102,13 +93,13 @@ export default async function SchedulePage() {
       {schedules.length === 0 ? (
         <section className="card">
           <div className="state-box">
-            <div className="state-icon">&#x1f4cb;</div>
-            <div className="state-title">No Schedules</div>
+            <div className="state-icon">&#x2705;</div>
+            <div className="state-title">All Caught Up</div>
             <div className="state-desc">
-              Upload your weekly meal plan to create scheduled meals. Use the POST /v1/schedules endpoint or import via the backfill flow.
+              No meals waiting to be prepared. Fed and skipped meals appear on the Calendar.
             </div>
-            <Link href="/upload" className="btn btn-primary mt-4">
-              Import Data
+            <Link href="/calendar" className="btn btn-primary mt-4">
+              View Calendar
             </Link>
           </div>
         </section>

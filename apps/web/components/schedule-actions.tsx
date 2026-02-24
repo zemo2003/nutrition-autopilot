@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useState, useCallback } from "react";
 
 function resolveApiBase() {
@@ -87,20 +86,10 @@ export function ScheduleBoard({
           throw new Error(body.error || "Request failed");
         }
 
-        const data = await res.json();
+        await res.json();
 
-        setSchedules((prev) =>
-          prev.map((s) =>
-            s.id === scheduleId
-              ? {
-                  ...s,
-                  status: data.status,
-                  serviceEventId: data.freeze?.serviceEventId ?? s.serviceEventId,
-                  finalLabelSnapshotId: data.freeze?.labelSnapshotId ?? s.finalLabelSnapshotId,
-                }
-              : s
-          )
-        );
+        // Remove from list — fed meals go to calendar, skipped meals disappear
+        setSchedules((prev) => prev.filter((s) => s.id !== scheduleId));
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
         setErrors((prev) => ({ ...prev, [scheduleId]: message }));
@@ -136,7 +125,6 @@ export function ScheduleBoard({
               <div
                 key={schedule.id}
                 className="meal-card"
-                data-status={schedule.status.toLowerCase()}
               >
                 <div className="meal-info">
                   <div className="meal-name">{schedule.skuName}</div>
@@ -160,42 +148,20 @@ export function ScheduleBoard({
                 </div>
 
                 <div className="meal-actions">
-                  {schedule.status === "PLANNED" && (
-                    <>
-                      <button
-                        className="btn btn-primary btn-sm"
-                        disabled={!!loading[schedule.id]}
-                        onClick={() => handleAction(schedule.id, "DONE")}
-                      >
-                        {loading[schedule.id] === "DONE" ? "Freezing..." : "Fed"}
-                      </button>
-                      <button
-                        className="btn btn-outline btn-sm"
-                        disabled={!!loading[schedule.id]}
-                        onClick={() => handleAction(schedule.id, "SKIPPED")}
-                      >
-                        {loading[schedule.id] === "SKIPPED" ? "..." : "Skip"}
-                      </button>
-                    </>
-                  )}
-
-                  {schedule.status === "DONE" && (
-                    <>
-                      <span className="badge badge-success">Fed</span>
-                      {schedule.finalLabelSnapshotId && (
-                        <Link
-                          href={`/labels/${schedule.finalLabelSnapshotId}`}
-                          className="btn btn-outline btn-sm"
-                        >
-                          View Label
-                        </Link>
-                      )}
-                    </>
-                  )}
-
-                  {schedule.status === "SKIPPED" && (
-                    <span className="badge badge-neutral">Skipped</span>
-                  )}
+                  <button
+                    className="btn btn-primary btn-sm"
+                    disabled={!!loading[schedule.id]}
+                    onClick={() => handleAction(schedule.id, "DONE")}
+                  >
+                    {loading[schedule.id] === "DONE" ? "Freezing..." : "Fed"}
+                  </button>
+                  <button
+                    className="btn btn-outline btn-sm"
+                    disabled={!!loading[schedule.id]}
+                    onClick={() => handleAction(schedule.id, "SKIPPED")}
+                  >
+                    {loading[schedule.id] === "SKIPPED" ? "..." : "Skip"}
+                  </button>
                 </div>
 
                 {errors[schedule.id] && (
