@@ -945,6 +945,11 @@ pre {
   .client-grid { grid-template-columns: 1fr; }
 }
 
+/* ── Schedule Status ────────────────────────────────── */
+.meal-card[data-status="done"]    { border-left: 3px solid var(--c-success); opacity: 0.75; }
+.meal-card[data-status="skipped"] { opacity: 0.45; border-left: 3px solid var(--c-border); }
+.meal-card[data-status="skipped"] .meal-name { text-decoration: line-through; }
+
 /* ── Print Media ────────────────────────────────────── */
 @media print {
   body { background: #fff; font-size: 12px; }

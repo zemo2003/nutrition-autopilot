@@ -6,7 +6,7 @@ import { execFile as execFileCb } from "node:child_process";
 import express from "express";
 import multer from "multer";
 import { addHours, endOfMonth, parse, startOfMonth } from "date-fns";
-import { prisma, NutrientSourceType, VerificationStatus, VerificationTaskStatus, VerificationTaskSeverity } from "@nutrition/db";
+import { prisma, NutrientSourceType, VerificationStatus, VerificationTaskStatus, VerificationTaskSeverity, ScheduleStatus } from "@nutrition/db";
 import { parseInstacartOrders, parsePilotMeals, parseSotWorkbook, mapOrderLineToIngredient } from "@nutrition/importers";
 import { getDefaultUser, getPrimaryOrganization } from "../lib/context.js";
 import { freezeLabelFromScheduleDone, buildLineageTree } from "../lib/label-freeze.js";
@@ -862,6 +862,128 @@ function parseDateOnlyUtc(input: string): Date {
   if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return new Date();
   return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
 }
+
+// ── Schedules ─────────────────────────────────────────────────
+
+v1Router.get("/schedules", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const statusRaw = typeof req.query.status === "string" ? req.query.status.toUpperCase() : undefined;
+  const status = statusRaw && Object.values(ScheduleStatus).includes(statusRaw as ScheduleStatus)
+    ? (statusRaw as ScheduleStatus) : undefined;
+  const clientId = typeof req.query.clientId === "string" ? req.query.clientId : undefined;
+  const from = typeof req.query.from === "string" ? req.query.from : undefined;
+  const to = typeof req.query.to === "string" ? req.query.to : undefined;
+
+  const schedules = await prisma.mealSchedule.findMany({
+    where: {
+      organizationId: org.id,
+      ...(status ? { status } : {}),
+      ...(clientId ? { clientId } : {}),
+      ...(from || to
+        ? {
+            serviceDate: {
+              ...(from ? { gte: parseDateOnlyUtc(from) } : {}),
+              ...(to ? { lte: parseDateOnlyUtc(to) } : {}),
+            },
+          }
+        : {}),
+    },
+    include: {
+      sku: true,
+      client: true,
+      serviceEvent: {
+        select: { id: true, finalLabelSnapshotId: true },
+      },
+    },
+    orderBy: [{ serviceDate: "asc" }, { mealSlot: "asc" }],
+  });
+
+  return res.json({
+    schedules: schedules.map((s) => ({
+      id: s.id,
+      clientId: s.clientId,
+      clientName: s.client.fullName,
+      skuId: s.skuId,
+      skuName: s.sku.name,
+      skuCode: s.sku.code,
+      serviceDate: s.serviceDate.toISOString().slice(0, 10),
+      mealSlot: s.mealSlot,
+      status: s.status,
+      plannedServings: s.plannedServings,
+      serviceEventId: s.serviceEvent?.id ?? null,
+      finalLabelSnapshotId: s.serviceEvent?.finalLabelSnapshotId ?? null,
+    })),
+  });
+});
+
+v1Router.post("/schedules", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const user = await getDefaultUser();
+  const items = Array.isArray(req.body?.items) ? req.body.items : [];
+
+  if (items.length === 0) {
+    return res.status(400).json({ error: "items array is required and must not be empty" });
+  }
+
+  let created = 0;
+  let skipped = 0;
+  const errors: Array<{ index: number; message: string }> = [];
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const skuCode = typeof item.skuCode === "string" ? item.skuCode : null;
+    const clientId = typeof item.clientId === "string" ? item.clientId : null;
+    const serviceDate = typeof item.serviceDate === "string" ? item.serviceDate : null;
+    const mealSlot = typeof item.mealSlot === "string" ? item.mealSlot : null;
+    const servings = typeof item.servings === "number" ? item.servings : 1;
+    const notes = typeof item.notes === "string" ? item.notes : null;
+
+    if (!skuCode || !clientId || !serviceDate || !mealSlot) {
+      errors.push({ index: i, message: "skuCode, clientId, serviceDate, and mealSlot are required" });
+      continue;
+    }
+
+    const sku = await prisma.sku.findFirst({
+      where: { organizationId: org.id, code: skuCode },
+    });
+    if (!sku) {
+      errors.push({ index: i, message: `SKU not found: ${skuCode}` });
+      continue;
+    }
+
+    // Dedup: skip if identical schedule already exists
+    const existing = await prisma.mealSchedule.findFirst({
+      where: {
+        organizationId: org.id,
+        clientId,
+        skuId: sku.id,
+        serviceDate: parseDateOnlyUtc(serviceDate),
+        mealSlot,
+      },
+    });
+    if (existing) {
+      skipped += 1;
+      continue;
+    }
+
+    await prisma.mealSchedule.create({
+      data: {
+        organizationId: org.id,
+        clientId,
+        skuId: sku.id,
+        serviceDate: parseDateOnlyUtc(serviceDate),
+        mealSlot,
+        plannedServings: servings,
+        status: "PLANNED",
+        notes,
+        createdBy: user.email,
+      },
+    });
+    created += 1;
+  }
+
+  return res.json({ created, skipped, errors });
+});
 
 v1Router.patch("/schedule/:id/status", async (req, res) => {
   const user = await getDefaultUser();
