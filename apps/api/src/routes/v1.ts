@@ -179,6 +179,7 @@ v1Router.post("/imports/sot", upload.single("file"), async (req, res) => {
   let updatedCount = 0;
 
   if (mode === "commit" && parsed.errors.length === 0) {
+    // Phase 1: Upsert ingredients, SKUs, recipes inside a transaction
     await prisma.$transaction(async (tx) => {
       for (const ingredient of parsed.ingredients) {
         const existing = await tx.ingredientCatalog.findFirst({
@@ -281,91 +282,92 @@ v1Router.post("/imports/sot", upload.single("file"), async (req, res) => {
           createdCount += 1;
         }
       }
+    }, { timeout: 30000 });
 
-      // Create PLANNED schedules from Weekly_Schedule sheet
-      let schedulesCreated = 0;
-      let schedulesSkipped = 0;
-      if (parsed.weeklySchedule.length > 0) {
-        // Resolve/create clients by name
-        const clientIdByName = new Map<string, string>();
-        for (const entry of parsed.weeklySchedule) {
-          if (clientIdByName.has(entry.clientName)) continue;
-          const existing = await tx.client.findFirst({
-            where: { organizationId: org.id, fullName: entry.clientName },
-          });
-          if (existing) {
-            clientIdByName.set(entry.clientName, existing.id);
-          } else {
-            const created = await tx.client.create({
-              data: {
-                organizationId: org.id,
-                fullName: entry.clientName,
-                externalRef: entry.clientName.toUpperCase().replace(/[^A-Z0-9]+/g, "-"),
-                createdBy: user.email,
-              },
-            });
-            clientIdByName.set(entry.clientName, created.id);
-            createdCount += 1;
-          }
-        }
-
-        for (const entry of parsed.weeklySchedule) {
-          const sku = await tx.sku.findFirst({
-            where: { organizationId: org.id, code: entry.skuCode },
-          });
-          if (!sku) continue; // Already validated by parser
-
-          const clientId = clientIdByName.get(entry.clientName);
-          if (!clientId) continue;
-
-          const serviceDate = parseDateOnlyUtc(entry.serviceDate);
-
-          // Dedup: skip if identical schedule already exists
-          const dup = await tx.mealSchedule.findFirst({
-            where: {
-              organizationId: org.id,
-              clientId,
-              skuId: sku.id,
-              serviceDate,
-              mealSlot: entry.mealSlot,
-            },
-          });
-          if (dup) {
-            schedulesSkipped += 1;
-            continue;
-          }
-
-          await tx.mealSchedule.create({
+    // Phase 2: Create PLANNED schedules OUTSIDE the transaction
+    // (idempotent with dedup — safe to run separately)
+    let schedulesCreated = 0;
+    let schedulesSkipped = 0;
+    if (parsed.weeklySchedule.length > 0) {
+      // Resolve/create clients by name
+      const clientIdByName = new Map<string, string>();
+      for (const entry of parsed.weeklySchedule) {
+        if (clientIdByName.has(entry.clientName)) continue;
+        const existing = await prisma.client.findFirst({
+          where: { organizationId: org.id, fullName: entry.clientName },
+        });
+        if (existing) {
+          clientIdByName.set(entry.clientName, existing.id);
+        } else {
+          const created = await prisma.client.create({
             data: {
               organizationId: org.id,
-              clientId,
-              skuId: sku.id,
-              serviceDate,
-              mealSlot: entry.mealSlot,
-              plannedServings: entry.servings,
-              status: "PLANNED",
+              fullName: entry.clientName,
+              externalRef: entry.clientName.toUpperCase().replace(/[^A-Z0-9]+/g, "-"),
               createdBy: user.email,
             },
           });
-          schedulesCreated += 1;
+          clientIdByName.set(entry.clientName, created.id);
           createdCount += 1;
         }
       }
 
-      await tx.importJob.update({
-        where: { id: job.id },
-        data: {
-          status: "SUCCEEDED",
-          summary: {
-            ...(job.summary as object),
-            createdCount,
-            updatedCount,
-            schedulesCreated,
-            schedulesSkipped,
-            errors: parsed.errors.length
-          }
+      for (const entry of parsed.weeklySchedule) {
+        const sku = await prisma.sku.findFirst({
+          where: { organizationId: org.id, code: entry.skuCode },
+        });
+        if (!sku) continue; // Already validated by parser
+
+        const clientId = clientIdByName.get(entry.clientName);
+        if (!clientId) continue;
+
+        const serviceDate = parseDateOnlyUtc(entry.serviceDate);
+
+        // Dedup: skip if identical schedule already exists
+        const dup = await prisma.mealSchedule.findFirst({
+          where: {
+            organizationId: org.id,
+            clientId,
+            skuId: sku.id,
+            serviceDate,
+            mealSlot: entry.mealSlot,
+          },
+        });
+        if (dup) {
+          schedulesSkipped += 1;
+          continue;
         }
-      });
+
+        await prisma.mealSchedule.create({
+          data: {
+            organizationId: org.id,
+            clientId,
+            skuId: sku.id,
+            serviceDate,
+            mealSlot: entry.mealSlot,
+            plannedServings: entry.servings,
+            status: "PLANNED",
+            createdBy: user.email,
+          },
+        });
+        schedulesCreated += 1;
+        createdCount += 1;
+      }
+    }
+
+    await prisma.importJob.update({
+      where: { id: job.id },
+      data: {
+        status: "SUCCEEDED",
+        summary: {
+          ...(job.summary as object),
+          createdCount,
+          updatedCount,
+          schedulesCreated,
+          schedulesSkipped,
+          errors: parsed.errors.length
+        }
+      }
     });
   }
 
