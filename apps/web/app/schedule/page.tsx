@@ -55,12 +55,24 @@ function isToday(dateStr: string): boolean {
 export default async function SchedulePage() {
   const schedules = await getSchedules();
 
+  // Meal slot display order (chef's daily flow)
+  const SLOT_ORDER: Record<string, number> = {
+    BREAKFAST: 0, LUNCH: 1, PRE_TRAINING: 2, POST_TRAINING: 3,
+    SNACK: 4, DINNER: 5, PRE_BED: 6,
+  };
+
   // Group by date
   const grouped: Record<string, ScheduleItem[]> = {};
   for (const s of schedules) {
     const day = s.serviceDate;
     if (!grouped[day]) grouped[day] = [];
     grouped[day]!.push(s);
+  }
+  // Sort meals within each day by slot order
+  for (const day of Object.keys(grouped)) {
+    grouped[day]!.sort((a, b) =>
+      (SLOT_ORDER[a.mealSlot.toUpperCase()] ?? 99) - (SLOT_ORDER[b.mealSlot.toUpperCase()] ?? 99)
+    );
   }
 
   // Sort dates: today first, then ascending

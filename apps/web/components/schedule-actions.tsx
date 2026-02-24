@@ -58,6 +58,21 @@ function slotClass(slot?: string): string {
   return "meal-slot meal-slot-snack";
 }
 
+// Meal slot display order (chef's daily flow)
+const SLOT_ORDER: Record<string, number> = {
+  BREAKFAST: 0,
+  LUNCH: 1,
+  PRE_TRAINING: 2,
+  POST_TRAINING: 3,
+  SNACK: 4,
+  DINNER: 5,
+  PRE_BED: 6,
+};
+
+function slotSortKey(slot: string): number {
+  return SLOT_ORDER[slot.toUpperCase()] ?? 99;
+}
+
 // Group categories for chef-friendly display order
 const CATEGORY_ORDER = ["protein", "vegetable", "grain", "fruit", "dairy", "fat", "condiment", "other", "unmapped"];
 const CATEGORY_LABELS: Record<string, string> = {
@@ -169,6 +184,10 @@ export function ScheduleBoard({
     const day = s.serviceDate;
     if (!grouped[day]) grouped[day] = [];
     grouped[day]!.push(s);
+  }
+  // Sort meals within each day by slot order
+  for (const day of Object.keys(grouped)) {
+    grouped[day]!.sort((a, b) => slotSortKey(a.mealSlot) - slotSortKey(b.mealSlot));
   }
 
   const toggleExpand = useCallback((id: string) => {
