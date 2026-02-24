@@ -678,7 +678,7 @@ v1Router.post("/imports/instacart-orders", upload.single("file"), async (req, re
           }))
         });
       }
-    });
+    }, { timeout: 60000 });
   } else {
     await prisma.importJob.update({
       where: { id: job.id },
