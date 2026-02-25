@@ -340,8 +340,14 @@ export async function freezeLabelFromScheduleDone(input: {
       return { mealServiceEventId: existingEvent.id, labelSnapshotId: existingEvent.finalLabelSnapshotId };
     }
 
+    if (!schedule.skuId || !schedule.sku) {
+      throw new Error("Cannot freeze label for composition-based meal (no SKU)");
+    }
+    const scheduleSku = schedule.sku;
+    const scheduleSkuId = schedule.skuId;
+
     const recipe = await tx.recipe.findFirst({
-      where: { skuId: schedule.skuId, active: true },
+      where: { skuId: scheduleSkuId, active: true },
       include: {
         lines: {
           include: { ingredient: true },
@@ -358,7 +364,7 @@ export async function freezeLabelFromScheduleDone(input: {
       data: {
         organizationId: schedule.organizationId,
         clientId: schedule.clientId,
-        skuId: schedule.skuId,
+        skuId: scheduleSkuId,
         mealScheduleId: schedule.id,
         servedAt: servedAtFromSchedule(schedule.serviceDate, schedule.mealSlot),
         servedByUserId: input.servedByUserId,
@@ -497,7 +503,7 @@ export async function freezeLabelFromScheduleDone(input: {
     );
 
     const label = computeSkuLabel({
-      skuName: schedule.sku.name,
+      skuName: scheduleSku.name,
       recipeName: recipe.name,
       servings: schedule.plannedServings,
       lines: recipe.lines.map((line) => {
@@ -549,7 +555,7 @@ export async function freezeLabelFromScheduleDone(input: {
     }
     const plausibilityIssues = validateFoodProduct(
       label.servingWeightG > 0 ? per100gForValidation : label.perServing,
-      schedule.sku.name
+      scheduleSku.name
     );
 
     const plausibilityErrors = plausibilityIssues.filter(
@@ -583,12 +589,12 @@ export async function freezeLabelFromScheduleDone(input: {
       data: {
         organizationId: schedule.organizationId,
         labelType: "SKU",
-        externalRefId: schedule.skuId,
-        title: `${schedule.sku.code} - ${schedule.sku.name}`,
+        externalRefId: scheduleSkuId,
+        title: `${scheduleSku.code} - ${scheduleSku.name}`,
         renderPayload: skuLabelPayload,
         frozenAt: new Date(),
         createdBy: "system",
-        version: await nextLabelVersion(tx, schedule.organizationId, "SKU", schedule.skuId)
+        version: await nextLabelVersion(tx, schedule.organizationId, "SKU", scheduleSkuId)
       }
     });
 
@@ -600,12 +606,12 @@ export async function freezeLabelFromScheduleDone(input: {
           taskType: "CONSISTENCY",
           severity: "CRITICAL",
           status: "OPEN",
-          title: `Plausibility errors: ${schedule.sku.name}`,
+          title: `Plausibility errors: ${scheduleSku.name}`,
           description: plausibilityErrors.map((e: PlausibilityIssue) => e.message).join("; "),
           payload: {
             labelSnapshotId: skuLabel.id,
-            skuId: schedule.skuId,
-            skuName: schedule.sku.name,
+            skuId: scheduleSkuId,
+            skuName: scheduleSku.name,
             issues: plausibilityErrors
           },
           createdBy: "system"

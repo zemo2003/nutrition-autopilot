@@ -139,6 +139,7 @@ async function getMealDemandByIngredient(
 
   const map = new Map<string, number>();
   for (const sched of schedules) {
+    if (!sched.sku) continue;
     for (const recipe of sched.sku.recipes) {
       for (const line of recipe.lines) {
         const grams = line.targetGPerServing * sched.plannedServings;

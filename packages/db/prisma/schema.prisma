@@ -234,7 +234,9 @@ model Organization {
   instacartMappings   InstacartMapping[]
   substitutionRecords SubstitutionRecord[]
   yieldCalibrations   YieldCalibration[]
-  qcIssues            QcIssue[]
+  qcIssues              QcIssue[]
+  compositionTemplates  CompositionTemplate[]
+  prepDrafts            PrepDraft[]
 }
 
 model User {
@@ -519,7 +521,9 @@ model MealSchedule {
   id              String         @id @default(cuid())
   organizationId  String
   clientId        String
-  skuId           String
+  skuId           String?
+  compositionId   String?
+  mealSource      MealSource     @default(RECIPE)
   serviceDate     DateTime
   mealSlot        String
   status          ScheduleStatus @default(PLANNED)
@@ -530,9 +534,10 @@ model MealSchedule {
   updatedAt       DateTime       @updatedAt
   version         Int            @default(1)
 
-  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  client       Client            @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  sku          Sku               @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client                @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  sku          Sku?                  @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  composition  CompositionTemplate?  @relation(fields: [compositionId], references: [id], onDelete: Restrict)
   serviceEvent MealServiceEvent?
 
   @@index([organizationId, clientId, serviceDate])
@@ -731,7 +736,8 @@ model Component {
   batches           BatchProduction[]
   sauceVariants     SauceVariant[]
   saucePairings     SaucePairing[]     @relation("SaucePairings")
-  yieldCalibrations YieldCalibration[]
+  yieldCalibrations  YieldCalibration[]
+  compositionSlots   CompositionSlot[]
 
   @@unique([organizationId, name])
   @@index([organizationId, componentType])
@@ -999,4 +1005,87 @@ model QcIssue {
 
   @@index([organizationId, batchProductionId])
   @@index([organizationId, issueType])
+}
+
+// ── Sprint 3: Composition + Menu Composer + Prep Optimizer ──────────
+
+enum MealSource {
+  RECIPE
+  COMPOSITION
+}
+
+enum PrepDraftStatus {
+  DRAFT
+  APPROVED
+  COMMITTED
+  CANCELLED
+}
+
+// Reusable composition template (protein + base + veg + sauce slots)
+model CompositionTemplate {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  description     String?
+  targetKcal      Float?
+  targetProteinG  Float?
+  targetCarbG     Float?
+  targetFatG      Float?
+  allergenTags    String[]
+  flavorProfiles  FlavorProfile[]
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  createdBy       String   @default("system")
+  updatedAt       DateTime @updatedAt
+  version         Int      @default(1)
+
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  slots          CompositionSlot[]
+  mealSchedules  MealSchedule[]
+
+  @@index([organizationId])
+}
+
+// Individual slot in a composition template
+model CompositionSlot {
+  id             String        @id @default(cuid())
+  templateId     String
+  slotType       ComponentType
+  componentId    String?
+  targetG        Float
+  portionG       Float?
+  sauceVariantId String?
+  slotOrder      Int
+  required       Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  template  CompositionTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  component Component?          @relation(fields: [componentId], references: [id])
+
+  @@unique([templateId, slotOrder])
+  @@index([templateId])
+}
+
+// Weekly prep draft (demand rollup → batch suggestions)
+model PrepDraft {
+  id              String          @id @default(cuid())
+  organizationId  String
+  weekStart       DateTime
+  weekEnd         DateTime
+  status          PrepDraftStatus @default(DRAFT)
+  demandPayload   Json
+  batchSuggestions Json
+  shortages       Json?
+  notes           String?
+  approvedAt      DateTime?
+  approvedBy      String?
+  createdAt       DateTime        @default(now())
+  createdBy       String          @default("system")
+  updatedAt       DateTime        @updatedAt
+  version         Int             @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, weekStart])
 }

@@ -6,7 +6,7 @@ import { execFile as execFileCb } from "node:child_process";
 import express from "express";
 import multer from "multer";
 import { addHours, endOfMonth, parse, startOfMonth } from "date-fns";
-import { prisma, NutrientSourceType, VerificationStatus, VerificationTaskStatus, VerificationTaskSeverity, ScheduleStatus, BatchStatus, ComponentType, StorageLocation, SauceVariantType, BatchCheckpointType, MappingResolutionSource, SubstitutionStatus, CalibrationStatus, QcIssueType } from "@nutrition/db";
+import { prisma, NutrientSourceType, VerificationStatus, VerificationTaskStatus, VerificationTaskSeverity, ScheduleStatus, BatchStatus, ComponentType, StorageLocation, SauceVariantType, BatchCheckpointType, MappingResolutionSource, SubstitutionStatus, CalibrationStatus, QcIssueType, MealSource, PrepDraftStatus } from "@nutrition/db";
 import { parseInstacartOrders, parsePilotMeals, parseSotWorkbook, mapOrderLineToIngredient } from "@nutrition/importers";
 import { getDefaultUser, getPrimaryOrganization } from "../lib/context.js";
 import { freezeLabelFromScheduleDone, buildLineageTree } from "../lib/label-freeze.js";
@@ -3802,4 +3802,384 @@ v1Router.post("/batches/:id/validate-checkpoint", async (req, res) => {
     targetStatus,
     ...result,
   });
+});
+
+// ── Sprint 3: Composition Templates + Menu Composer + Prep Optimizer ──
+
+/** GET /v1/compositions — list composition templates */
+v1Router.get("/compositions", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const templates = await prisma.compositionTemplate.findMany({
+    where: { organizationId: org.id, active: true },
+    include: {
+      slots: {
+        include: { component: { select: { id: true, name: true, componentType: true } } },
+        orderBy: { slotOrder: "asc" },
+      },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  return res.json({ compositions: templates, count: templates.length });
+});
+
+/** GET /v1/compositions/:id — get single composition template */
+v1Router.get("/compositions/:id", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const template = await prisma.compositionTemplate.findUnique({
+    where: { id: req.params.id },
+    include: {
+      slots: {
+        include: { component: { select: { id: true, name: true, componentType: true } } },
+        orderBy: { slotOrder: "asc" },
+      },
+    },
+  });
+  if (!template || template.organizationId !== org.id) {
+    return res.status(404).json({ error: "composition not found" });
+  }
+  return res.json({ composition: template });
+});
+
+/** POST /v1/compositions — create a composition template */
+v1Router.post("/compositions", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const {
+    name,
+    description,
+    targetKcal,
+    targetProteinG,
+    targetCarbG,
+    targetFatG,
+    allergenTags,
+    flavorProfiles,
+    slots,
+  } = req.body as {
+    name: string;
+    description?: string;
+    targetKcal?: number;
+    targetProteinG?: number;
+    targetCarbG?: number;
+    targetFatG?: number;
+    allergenTags?: string[];
+    flavorProfiles?: string[];
+    slots: { slotType: string; componentId?: string; targetG: number; portionG?: number; sauceVariantId?: string; slotOrder: number; required?: boolean }[];
+  };
+
+  if (!name || !Array.isArray(slots) || slots.length === 0) {
+    return res.status(400).json({ error: "name and at least one slot required" });
+  }
+
+  const template = await prisma.compositionTemplate.create({
+    data: {
+      organizationId: org.id,
+      name,
+      description,
+      targetKcal,
+      targetProteinG,
+      targetCarbG,
+      targetFatG,
+      allergenTags: allergenTags ?? [],
+      flavorProfiles: (flavorProfiles ?? []) as any,
+      slots: {
+        create: slots.map((s) => ({
+          slotType: s.slotType as ComponentType,
+          componentId: s.componentId ?? null,
+          targetG: s.targetG,
+          portionG: s.portionG ?? null,
+          sauceVariantId: s.sauceVariantId ?? null,
+          slotOrder: s.slotOrder,
+          required: s.required ?? true,
+        })),
+      },
+    },
+    include: {
+      slots: {
+        include: { component: { select: { id: true, name: true, componentType: true } } },
+        orderBy: { slotOrder: "asc" },
+      },
+    },
+  });
+
+  return res.json({ composition: template });
+});
+
+/** POST /v1/compositions/:id/preview — preview macro aggregation for a composition */
+v1Router.post("/compositions/:id/preview", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const template = await prisma.compositionTemplate.findUnique({
+    where: { id: req.params.id },
+    include: {
+      slots: {
+        include: {
+          component: {
+            include: {
+              lines: {
+                include: { ingredient: { select: { id: true, name: true, allergenTags: true } } },
+              },
+            },
+          },
+        },
+        orderBy: { slotOrder: "asc" },
+      },
+    },
+  });
+
+  if (!template || template.organizationId !== org.id) {
+    return res.status(404).json({ error: "composition not found" });
+  }
+
+  const { aggregateComposition, checkAllergenWarnings } = await import("@nutrition/nutrition-engine/composition-engine");
+
+  // Build slot inputs from component data
+  const slotInputs = template.slots
+    .filter((s) => s.component)
+    .map((s) => {
+      const comp = s.component!;
+      // Approximate nutrients per 100g from component lines
+      // In a real implementation this would come from cached nutrient data
+      return {
+        slotType: s.slotType,
+        componentId: comp.id,
+        componentName: comp.name,
+        targetG: s.targetG,
+        portionG: s.portionG ?? undefined,
+        nutrientsPer100g: {
+          kcal: 0,
+          proteinG: 0,
+          carbG: 0,
+          fatG: 0,
+        },
+        allergenTags: comp.allergenTags,
+        flavorProfiles: comp.flavorProfiles,
+      };
+    });
+
+  const clientExclusions = req.body.clientExclusions ?? [];
+  const result = aggregateComposition(slotInputs);
+  const allergenCheck = checkAllergenWarnings(slotInputs, clientExclusions as string[]);
+
+  return res.json({
+    preview: result,
+    allergenCheck,
+    template: { id: template.id, name: template.name },
+  });
+});
+
+/** DELETE /v1/compositions/:id — soft delete (deactivate) a composition template */
+v1Router.delete("/compositions/:id", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const existing = await prisma.compositionTemplate.findUnique({ where: { id: req.params.id } });
+  if (!existing || existing.organizationId !== org.id) {
+    return res.status(404).json({ error: "composition not found" });
+  }
+
+  await prisma.compositionTemplate.update({
+    where: { id: req.params.id },
+    data: { active: false, version: { increment: 1 } },
+  });
+
+  return res.json({ deleted: true });
+});
+
+/** POST /v1/prep-drafts — generate a weekly prep draft */
+v1Router.post("/prep-drafts", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { weekStart, weekEnd } = req.body as { weekStart: string; weekEnd: string };
+
+  if (!weekStart || !weekEnd) {
+    return res.status(400).json({ error: "weekStart and weekEnd required" });
+  }
+
+  const start = new Date(weekStart);
+  const end = new Date(weekEnd);
+
+  // Get planned meals in the week (Sku → Recipe → RecipeLine → ingredient)
+  const schedules = await prisma.mealSchedule.findMany({
+    where: {
+      organizationId: org.id,
+      status: "PLANNED" as ScheduleStatus,
+      serviceDate: { gte: start, lte: end },
+      skuId: { not: null },
+    },
+    include: {
+      sku: {
+        include: {
+          recipes: {
+            where: { active: true },
+            include: {
+              lines: {
+                include: { ingredient: { select: { id: true, name: true, category: true } } },
+              },
+            },
+            take: 1,
+          },
+        },
+      },
+    },
+  });
+
+  // Build meal demands from schedule → sku → recipe → lines
+  const meals: { mealId: string; serviceDate: string; componentId: string; componentName: string; componentType: string; cookedG: number }[] = [];
+
+  for (const s of schedules) {
+    const recipe = s.sku?.recipes?.[0];
+    if (!recipe?.lines) continue;
+    for (const line of recipe.lines) {
+      meals.push({
+        mealId: s.id,
+        serviceDate: s.serviceDate.toISOString().slice(0, 10),
+        componentId: line.ingredientId,
+        componentName: line.ingredient.name,
+        componentType: line.ingredient.category,
+        cookedG: line.targetGPerServing * (recipe.servings ?? 1),
+      });
+    }
+  }
+
+  // Get yield info from calibrations
+  const calibrations = await prisma.yieldCalibration.findMany({
+    where: {
+      organizationId: org.id,
+      status: "ACCEPTED" as CalibrationStatus,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  const yieldMap = new Map<string, { yieldFactor: number; basis: "calibrated" | "default" }>();
+  for (const cal of calibrations) {
+    if (!yieldMap.has(cal.componentId) && cal.proposedYieldPct) {
+      yieldMap.set(cal.componentId, {
+        yieldFactor: cal.proposedYieldPct / 100,
+        basis: "calibrated",
+      });
+    }
+  }
+
+  const yields = Array.from(yieldMap.entries()).map(([id, info]) => ({
+    componentId: id,
+    ...info,
+  }));
+
+  // Get inventory on hand (productId → ingredientId via product catalog)
+  const lots = await prisma.inventoryLot.findMany({
+    where: {
+      organizationId: org.id,
+      quantityAvailableG: { gt: 0 },
+      OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+    },
+    include: { product: { select: { ingredientId: true } } },
+  });
+
+  const inventoryMap = new Map<string, number>();
+  for (const lot of lots) {
+    const ingId = lot.product.ingredientId;
+    const current = inventoryMap.get(ingId) ?? 0;
+    inventoryMap.set(ingId, current + lot.quantityAvailableG);
+  }
+
+  const inventory = Array.from(inventoryMap.entries()).map(([id, g]) => ({
+    componentId: id,
+    availableG: g,
+  }));
+
+  const { generatePrepDraft } = await import("@nutrition/nutrition-engine/prep-optimizer");
+  const draft = generatePrepDraft(weekStart, weekEnd, meals, yields, inventory);
+
+  // Save to DB
+  const record = await prisma.prepDraft.create({
+    data: {
+      organizationId: org.id,
+      weekStart: start,
+      weekEnd: end,
+      status: "DRAFT" as PrepDraftStatus,
+      demandPayload: draft.demand as any,
+      batchSuggestions: draft.batchSuggestions as any,
+      shortages: draft.shortages as any,
+    },
+  });
+
+  return res.json({ draft: { ...draft, id: record.id } });
+});
+
+/** GET /v1/prep-drafts — list prep drafts */
+v1Router.get("/prep-drafts", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const records = await prisma.prepDraft.findMany({
+    where: { organizationId: org.id },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+  });
+  return res.json({ drafts: records, count: records.length });
+});
+
+/** PATCH /v1/prep-drafts/:id/approve — approve a prep draft */
+v1Router.patch("/prep-drafts/:id/approve", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const existing = await prisma.prepDraft.findUnique({ where: { id: req.params.id } });
+  if (!existing || existing.organizationId !== org.id) {
+    return res.status(404).json({ error: "prep draft not found" });
+  }
+  if (existing.status !== "DRAFT") {
+    return res.status(400).json({ error: `Cannot approve draft in status ${existing.status}` });
+  }
+
+  const updated = await prisma.prepDraft.update({
+    where: { id: req.params.id },
+    data: {
+      status: "APPROVED" as PrepDraftStatus,
+      approvedAt: new Date(),
+      approvedBy: "system",
+      version: { increment: 1 },
+    },
+  });
+
+  return res.json({ draft: updated });
+});
+
+/** GET /v1/sauce-matrix — sauce matrix data (flavor families, pairings, portion presets) */
+v1Router.get("/sauce-matrix", async (req, res) => {
+  const org = await getPrimaryOrganization();
+
+  // Get all sauce components with variants and pairings
+  const sauces = await prisma.component.findMany({
+    where: {
+      organizationId: org.id,
+      componentType: "SAUCE" as ComponentType,
+      active: true,
+    },
+    include: {
+      sauceVariants: { where: { active: true } },
+      saucePairings: true,
+    },
+    orderBy: { name: "asc" },
+  });
+
+  const matrix = sauces.map((sauce) => ({
+    id: sauce.id,
+    name: sauce.name,
+    flavorProfiles: sauce.flavorProfiles,
+    allergenTags: sauce.allergenTags,
+    variants: sauce.sauceVariants.map((v) => ({
+      id: v.id,
+      type: v.variantType,
+      kcalPer100g: v.kcalPer100g,
+      proteinPer100g: v.proteinPer100g,
+      carbPer100g: v.carbPer100g,
+      fatPer100g: v.fatPer100g,
+      portionPresets: [5, 10, 15, 20, 30].map((g) => ({
+        portionG: g,
+        kcal: v.kcalPer100g ? Math.round(v.kcalPer100g * g) / 100 : null,
+        proteinG: v.proteinPer100g ? Math.round(v.proteinPer100g * g) / 100 : null,
+        carbG: v.carbPer100g ? Math.round(v.carbPer100g * g) / 100 : null,
+        fatG: v.fatPer100g ? Math.round(v.fatPer100g * g) / 100 : null,
+      })),
+    })),
+    pairings: sauce.saucePairings.map((p) => ({
+      pairedComponentType: p.pairedComponentType,
+      recommended: p.recommended,
+      defaultPortionG: p.defaultPortionG,
+    })),
+  }));
+
+  return res.json({ sauces: matrix, count: matrix.length });
 });
