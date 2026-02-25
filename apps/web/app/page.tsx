@@ -193,6 +193,22 @@ export default async function HomePage() {
             </section>
           )}
 
+          <section className="section">
+            <h2 className="section-title">Kitchen Ops</h2>
+            <div className="kpi-grid">
+              <Link href={"/inventory" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">{state.counts.lotsOnHand}</div>
+                <div className="kpi-label">Inventory Lots</div>
+                <div className="kpi-note"><span className="badge badge-info">View</span></div>
+              </Link>
+              <Link href={"/batch-prep" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">Prep</div>
+                <div className="kpi-label">Batch Prep</div>
+                <div className="kpi-note"><span className="badge badge-info">Open</span></div>
+              </Link>
+            </div>
+          </section>
+
           {clients.length > 0 && (
             <section className="section">
               <h2 className="section-title">Clients</h2>
@@ -215,6 +231,14 @@ export default async function HomePage() {
                     <span className="client-card-arrow">&rarr;</span>
                   </Link>
                 ))}
+                <Link href={"/clients/profile" as any} className="client-card" style={{ borderStyle: "dashed" }}>
+                  <div className="client-avatar" style={{ background: "var(--c-surface-alt)" }}>P</div>
+                  <div className="client-card-info">
+                    <div className="client-card-name">Client Profile</div>
+                    <div className="client-card-meta">Health data & preferences</div>
+                  </div>
+                  <span className="client-card-arrow">&rarr;</span>
+                </Link>
               </div>
             </section>
           )}
