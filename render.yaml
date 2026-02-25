@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     rootDir: .
-    buildCommand: npm install --include=dev && npm run db:generate
+    buildCommand: npm install --include=dev && npm run db:generate && (pip3 install psycopg2-binary requests 2>/dev/null || true)
     startCommand: npm run -w apps/api start
     healthCheckPath: /v1/health
     envVars:

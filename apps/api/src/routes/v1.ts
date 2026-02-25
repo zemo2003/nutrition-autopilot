@@ -73,8 +73,60 @@ async function runJsonScript(scriptRelativePath: string, args: string[]) {
   }
 }
 
+// In-memory enrichment status tracking (keyed by importJobId)
+const enrichmentJobs = new Map<string, {
+  status: "PROCESSING" | "COMPLETED" | "FAILED";
+  startedAt: string;
+  finishedAt?: string;
+  summary?: Record<string, unknown>;
+  error?: string;
+}>();
+
+// Fire-and-forget enrichment after an import completes
+async function triggerEnrichmentAsync(importJobId: string, orgSlug: string, month: string) {
+  enrichmentJobs.set(importJobId, {
+    status: "PROCESSING",
+    startedAt: new Date().toISOString(),
+  });
+
+  try {
+    const enrichment = await runJsonScript("scripts/agent_nutrient_enrichment.py", [
+      "--organization-slug", orgSlug,
+      "--month", month,
+      "--all-products",
+      "--source-policy", "MAX_COVERAGE",
+      "--historical-mode", "true",
+    ]);
+
+    enrichmentJobs.set(importJobId, {
+      status: "COMPLETED",
+      startedAt: enrichmentJobs.get(importJobId)!.startedAt,
+      finishedAt: new Date().toISOString(),
+      summary: enrichment,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error(`[enrichment] Failed for import ${importJobId}: ${message}`);
+    enrichmentJobs.set(importJobId, {
+      status: "FAILED",
+      startedAt: enrichmentJobs.get(importJobId)!.startedAt,
+      finishedAt: new Date().toISOString(),
+      error: message,
+    });
+  }
+}
+
 v1Router.get("/health", (_req, res) => {
   res.json({ ok: true, service: "nutrition-autopilot-api", version: "v1" });
+});
+
+v1Router.get("/imports/:jobId/enrichment-status", (req, res) => {
+  const { jobId } = req.params;
+  const status = enrichmentJobs.get(jobId);
+  if (!status) {
+    return res.json({ status: "NOT_STARTED" });
+  }
+  return res.json(status);
 });
 
 v1Router.get("/system/state", async (_req, res) => {
@@ -387,7 +439,14 @@ v1Router.post("/imports/sot", upload.single("file"), async (req, res) => {
   });
 
   await setIdempotencyResponse(idempotencyKey, response);
-  return res.json(response);
+
+  // Auto-trigger nutrient enrichment in background on successful commit imports
+  if (mode === "commit" && !parsed.errors.length) {
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    triggerEnrichmentAsync(job.id, org.slug, currentMonth).catch(() => {});
+  }
+
+  return res.json({ ...response, enrichmentStatus: mode === "commit" && !parsed.errors.length ? "PROCESSING" : undefined });
 });
 
 v1Router.post("/imports/instacart-orders", upload.single("file"), async (req, res) => {
@@ -696,7 +755,14 @@ v1Router.post("/imports/instacart-orders", upload.single("file"), async (req, re
     errors
   });
   await setIdempotencyResponse(idempotencyKey, response);
-  return res.json(response);
+
+  // Auto-trigger nutrient enrichment in background on successful commit imports
+  if (mode === "commit") {
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    triggerEnrichmentAsync(job.id, org.slug, currentMonth).catch(() => {});
+  }
+
+  return res.json({ ...response, enrichmentStatus: mode === "commit" ? "PROCESSING" : undefined });
 });
 
 v1Router.post(

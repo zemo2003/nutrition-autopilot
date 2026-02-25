@@ -81,7 +81,7 @@ def main() -> int:
     }
 
     conn = psycopg2.connect(args.database_url)
-    conn.autocommit = False
+    conn.autocommit = True
     psycopg2.extras.register_default_jsonb(conn)
 
     try:
@@ -172,6 +172,7 @@ def main() -> int:
             artifact_path.write_text(json.dumps(artifact_payload, indent=2), encoding="utf-8")
 
             if row_ids and not args.dry_run:
+                conn.autocommit = False
                 cur.execute(
                     """
                     update "ProductNutrientValue"
@@ -192,17 +193,17 @@ def main() -> int:
                     (row_ids,),
                 )
                 summary["updatedRows"] = cur.rowcount
-
-            if args.dry_run:
-                conn.rollback()
-            else:
                 conn.commit()
+                conn.autocommit = True
 
         summary["finishedAt"] = datetime.now(timezone.utc).isoformat()
         print(json.dumps(summary, indent=2))
         return 0
     except Exception as exc:  # pragma: no cover - operational script
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         summary["errors"].append(str(exc))
         summary["finishedAt"] = datetime.now(timezone.utc).isoformat()
         print(json.dumps(summary, indent=2))

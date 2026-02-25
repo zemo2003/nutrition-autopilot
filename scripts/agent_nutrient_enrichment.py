@@ -1293,9 +1293,10 @@ def main() -> int:
     retrieval_run_id = str(uuid.uuid4())
     source = SourceClient(timeout=args.timeout, usda_key=args.usda_key)
 
-    conn = psycopg2.connect(args.database_url)
-    conn.autocommit = False
-    psycopg2.extras.register_default_jsonb(conn)
+    def _connect():
+        c = psycopg2.connect(args.database_url)
+        psycopg2.extras.register_default_jsonb(c)
+        return c
 
     summary: Dict[str, Any] = {
         "startedAt": datetime.now(timezone.utc).isoformat(),
@@ -1314,6 +1315,9 @@ def main() -> int:
     }
 
     try:
+        # Phase 1: Read-only — load all reference data in a short-lived connection
+        conn = _connect()
+        conn.autocommit = True
         with conn.cursor() as cur:
             org_id = get_org_id(cur, args.organization_slug)
             summary["organizationId"] = org_id
@@ -1327,7 +1331,7 @@ def main() -> int:
             )
             summary["productsProcessed"] = len(products)
             if not products:
-                conn.rollback()
+                conn.close()
                 summary["finishedAt"] = datetime.now(timezone.utc).isoformat()
                 print(json.dumps(summary, indent=2))
                 return 0
@@ -1336,99 +1340,120 @@ def main() -> int:
             existing_by_product = load_existing_values(cur, product_ids)
             nutrient_defs = load_nutrient_defs(cur)
             global_reference_values = load_global_reference_values(cur)
+        conn.close()
 
-            products_by_ingredient: Dict[str, List[ProductRow]] = defaultdict(list)
-            for product in products:
-                products_by_ingredient[product.ingredient_key].append(product)
+        # Phase 2: Resolve nutrient profiles (CPU + HTTP calls, no DB needed)
+        products_by_ingredient: Dict[str, List[ProductRow]] = defaultdict(list)
+        for product in products:
+            products_by_ingredient[product.ingredient_key].append(product)
 
-            resolved_by_product: Dict[str, Dict[str, SourceValue]] = {}
-            for product in products:
-                existing_values = existing_by_product.get(product.product_id, {})
-                resolved_by_product[product.product_id] = resolve_product_profile(source, product, existing_values)
+        resolved_by_product: Dict[str, Dict[str, SourceValue]] = {}
+        for product in products:
+            existing_values = existing_by_product.get(product.product_id, {})
+            resolved_by_product[product.product_id] = resolve_product_profile(source, product, existing_values)
 
-            global_fallbacks = {
-                **DEFAULT_SIMILAR_FALLBACKS,
-                **global_reference_values,
-                **build_global_fallbacks(resolved_by_product),
-            }
-            fill_from_similar_products(
-                products_by_ingredient=products_by_ingredient,
-                resolved_by_product=resolved_by_product,
-                global_fallbacks=global_fallbacks,
-                historical_mode=historical_mode,
+        global_fallbacks = {
+            **DEFAULT_SIMILAR_FALLBACKS,
+            **global_reference_values,
+            **build_global_fallbacks(resolved_by_product),
+        }
+        fill_from_similar_products(
+            products_by_ingredient=products_by_ingredient,
+            resolved_by_product=resolved_by_product,
+            global_fallbacks=global_fallbacks,
+            historical_mode=historical_mode,
+        )
+
+        # Phase 3: Write — commit per product to avoid long-running transactions
+        outcomes: List[Dict[str, Any]] = []
+        total_upserts = 0
+
+        conn = _connect()
+        conn.autocommit = False
+
+        for product in products:
+            resolved = resolved_by_product.get(product.product_id, {})
+
+            missing_core = [key for key in CORE_KEYS if key not in resolved]
+            if missing_core:
+                summary["productsMissingCoreAfter"] += 1
+
+            missing_any = [key for key in TARGET_KEYS if key not in resolved]
+            if missing_any:
+                summary["productsMissingAnyAfter"] += 1
+
+            try:
+                with conn.cursor() as cur:
+                    product_upserts = upsert_nutrients(
+                        cur,
+                        product_id=product.product_id,
+                        nutrient_defs=nutrient_defs,
+                        resolved=resolved,
+                        retrieval_run_id=retrieval_run_id,
+                        dry_run=args.dry_run,
+                    )
+
+                    upsert_verification_task(
+                        cur,
+                        organization_id=org_id,
+                        product=product,
+                        resolved=resolved,
+                        historical_mode=historical_mode,
+                        dry_run=args.dry_run,
+                    )
+
+                total_upserts += product_upserts
+
+                if args.dry_run:
+                    conn.rollback()
+                else:
+                    conn.commit()
+            except Exception as product_exc:
+                try:
+                    conn.rollback()
+                except Exception:
+                    # Reconnect if the connection was dropped
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = _connect()
+                    conn.autocommit = False
+                summary["errors"].append(f"Product {product.product_id}: {product_exc}")
+
+            outcomes.append(
+                {
+                    "productId": product.product_id,
+                    "productName": product.product_name,
+                    "ingredientKey": product.ingredient_key,
+                    "resolved": len(resolved),
+                    "missingCore": missing_core,
+                    "missingAny": missing_any,
+                    "inferredCount": len(
+                        [
+                            key
+                            for key, source_value in resolved.items()
+                            if source_value.evidence_grade
+                            in {"INFERRED_FROM_SIMILAR_PRODUCT", "INFERRED_FROM_INGREDIENT"}
+                        ]
+                    ),
+                    "historicalException": any(source_value.historical_exception for source_value in resolved.values()),
+                }
             )
 
-            outcomes: List[Dict[str, Any]] = []
-            total_upserts = 0
+        conn.close()
 
-            for product in products:
-                resolved = resolved_by_product.get(product.product_id, {})
-
-                missing_core = [key for key in CORE_KEYS if key not in resolved]
-                if missing_core:
-                    summary["productsMissingCoreAfter"] += 1
-
-                missing_any = [key for key in TARGET_KEYS if key not in resolved]
-                if missing_any:
-                    summary["productsMissingAnyAfter"] += 1
-
-                total_upserts += upsert_nutrients(
-                    cur,
-                    product_id=product.product_id,
-                    nutrient_defs=nutrient_defs,
-                    resolved=resolved,
-                    retrieval_run_id=retrieval_run_id,
-                    dry_run=args.dry_run,
-                )
-
-                upsert_verification_task(
-                    cur,
-                    organization_id=org_id,
-                    product=product,
-                    resolved=resolved,
-                    historical_mode=historical_mode,
-                    dry_run=args.dry_run,
-                )
-
-                outcomes.append(
-                    {
-                        "productId": product.product_id,
-                        "productName": product.product_name,
-                        "ingredientKey": product.ingredient_key,
-                        "resolved": len(resolved),
-                        "missingCore": missing_core,
-                        "missingAny": missing_any,
-                        "inferredCount": len(
-                            [
-                                key
-                                for key, source_value in resolved.items()
-                                if source_value.evidence_grade
-                                in {"INFERRED_FROM_SIMILAR_PRODUCT", "INFERRED_FROM_INGREDIENT"}
-                            ]
-                        ),
-                        "historicalException": any(source_value.historical_exception for source_value in resolved.values()),
-                    }
-                )
-
-            summary["upserts"] = total_upserts
-            summary["outcomes"] = outcomes
-
-            if args.dry_run:
-                conn.rollback()
-            else:
-                conn.commit()
+        summary["upserts"] = total_upserts
+        summary["outcomes"] = outcomes
 
         summary["finishedAt"] = datetime.now(timezone.utc).isoformat()
         print(json.dumps(summary, indent=2))
         return 0
     except Exception as exc:  # pragma: no cover - operational script
-        conn.rollback()
         summary["errors"].append(str(exc))
         summary["finishedAt"] = datetime.now(timezone.utc).isoformat()
         print(json.dumps(summary, indent=2))
         return 1
-    finally:
-        conn.close()
 
 
 if __name__ == "__main__":
