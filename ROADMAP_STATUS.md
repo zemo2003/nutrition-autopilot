@@ -2,7 +2,7 @@
 
 ## Current Sprint
 
-**Sprint 2** — Batch Yield Calibration + Cook/Chill QC Telemetry Extensions
+**Sprint 3** — Recipe/Composition Compatibility + Menu Composer + Prep Optimizer
 
 ## Status
 
@@ -16,6 +16,7 @@
 | Pre-roadmap (Kitchen Exec + Sauce) | gated_pass | 2026-02-25 |
 | Sprint 1A | gated_pass | 2026-02-25T18:00Z |
 | Sprint 1B | gated_pass | 2026-02-25T18:55Z |
+| Sprint 2 | gated_pass | 2026-02-25T20:10Z |
 
 ## Blockers
 
@@ -23,7 +24,7 @@ None currently identified.
 
 ## Next Action
 
-Implement Sprint 2: Batch Yield Calibration + Cook/Chill QC Telemetry.
+Implement Sprint 3: Recipe/Composition Compatibility + Menu Composer + Prep Optimizer.
 
 ## Latest Deploy Verification
 
@@ -57,13 +58,24 @@ Implement Sprint 2: Batch Yield Calibration + Cook/Chill QC Telemetry.
 - [x] Build: 19 routes
 - [ ] Deploy smoke test (pending merge to main)
 
+## Sprint 2 Deliverables
+
+- [x] Schema: YieldCalibration, QcIssue models + CalibrationStatus, QcIssueType enums (migration applied to Neon)
+- [x] Yield calibration engine: outlier detection (2σ z-score), confidence scoring, checkpoint gating (47 tests)
+- [x] API: 9 new endpoints (calibrations CRUD, proposals, variance analytics, QC issues, checkpoint validation)
+- [x] UI: Calibration board (records/proposals/analytics tabs) + QC issue board (open/resolved/override)
+- [x] 313 tests passing (47 new)
+- [x] Typecheck: clean (3/3 workspaces)
+- [x] Build: 21 routes
+- [ ] Deploy smoke test (pending merge to main)
+
 ## Sprint History
 
 | Sprint | Status | Gate | Notes |
 |--------|--------|------|-------|
 | Sprint 1A | gated_pass | 2026-02-25T18:00Z | Deployed, smoke tested |
 | Sprint 1B | gated_pass | 2026-02-25T18:55Z | Code complete, tests green |
-| Sprint 2 | in_progress | — | Starting now |
-| Sprint 3 | not_started | — | |
+| Sprint 2 | gated_pass | 2026-02-25T20:10Z | Code complete, tests green |
+| Sprint 3 | in_progress | — | Starting now |
 | Sprint 4 | not_started | — | |
 | Sprint 5 | not_started | — | |
