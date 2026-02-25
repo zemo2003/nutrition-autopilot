@@ -21,6 +21,8 @@ type HealthStatus = "connected" | "degraded" | "offline";
 const NAV_LINKS = [
   { href: "/", label: "Dashboard" },
   { href: "/schedule", label: "Schedule" },
+  { href: "/inventory", label: "Inventory" },
+  { href: "/batch-prep", label: "Batch Prep" },
   { href: "/calendar", label: "Calendar" },
   { href: "/verification", label: "Verification" },
   { href: "/upload", label: "Import" },
@@ -57,9 +59,8 @@ export function NavBar() {
     health === "connected" ? "API Connected" : health === "degraded" ? "API Degraded" : "API Offline";
   const isActive = (href: string) => {
     if (pathname === href) return true;
-    if (href === "/schedule" && pathname?.startsWith("/schedule")) return true;
+    if (href !== "/" && pathname?.startsWith(href)) return true;
     if (href === "/calendar" && pathname?.startsWith("/clients/")) return true;
-    if (href === "/verification" && pathname?.startsWith("/verification")) return true;
     return false;
   };
 
