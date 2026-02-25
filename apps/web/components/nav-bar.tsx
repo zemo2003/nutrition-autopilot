@@ -23,6 +23,8 @@ const NAV_LINKS = [
   { href: "/schedule", label: "Schedule" },
   { href: "/inventory", label: "Inventory" },
   { href: "/batch-prep", label: "Batch Prep" },
+  { href: "/kitchen", label: "Kitchen" },
+  { href: "/sauces", label: "Sauces" },
   { href: "/calendar", label: "Calendar" },
   { href: "/verification", label: "Verification" },
   { href: "/upload", label: "Import" },

@@ -81,6 +81,19 @@ async function getClients() {
   }
 }
 
+async function getSauceCount() {
+  try {
+    const response = await fetch(`${API_BASE}/v1/sauces`, { cache: "no-store" });
+    if (!response.ok) return 0;
+    const json = await response.json();
+    if (Array.isArray(json)) return json.length;
+    if (json && Array.isArray(json.sauces)) return json.sauces.length;
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
 async function getQualitySummary() {
   try {
     const month = new Date().toISOString().slice(0, 7);
@@ -93,7 +106,7 @@ async function getQualitySummary() {
 }
 
 export default async function HomePage() {
-  const [state, clients, quality] = await Promise.all([getState(), getClients(), getQualitySummary()]);
+  const [state, clients, quality, sauceCount] = await Promise.all([getState(), getClients(), getQualitySummary(), getSauceCount()]);
   const isEmpty = !state || !state.hasCommittedSot;
 
   return (
@@ -205,6 +218,24 @@ export default async function HomePage() {
                 <div className="kpi-value">Prep</div>
                 <div className="kpi-label">Batch Prep</div>
                 <div className="kpi-note"><span className="badge badge-info">Open</span></div>
+              </Link>
+              <Link href={"/kitchen" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">Live</div>
+                <div className="kpi-label">Kitchen Mode</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Active batch execution</div>
+              </Link>
+              <Link href={"/sauces" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">{sauceCount}</div>
+                <div className="kpi-label">Sauce Library</div>
+                <div className="kpi-note"><span className="badge badge-info">Browse</span></div>
+              </Link>
+            </div>
+            <div className="row" style={{ gap: "var(--sp-2)", marginTop: "var(--sp-4)" }}>
+              <Link href={"/kitchen/print/pull-list" as any} className="btn btn-outline btn-sm">
+                Print Pull List
+              </Link>
+              <Link href={"/kitchen/print/daily-summary" as any} className="btn btn-outline btn-sm">
+                Print Daily Summary
               </Link>
             </div>
           </section>

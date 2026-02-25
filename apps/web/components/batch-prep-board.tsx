@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 function resolveApiBase() {
@@ -97,6 +98,7 @@ export function BatchPrepBoard() {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [components, setComponents] = useState<Component[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("active");
   const [showCreate, setShowCreate] = useState(false);
 
@@ -114,15 +116,19 @@ export function BatchPrepBoard() {
 
   const fetchData = useCallback(async () => {
     try {
+      setFetchError(null);
       const statusParam = statusFilter === "active" ? "status=PLANNED,IN_PREP,COOKING,CHILLING,PORTIONED" : statusFilter !== "all" ? `status=${statusFilter}` : "";
       const [batchRes, compRes] = await Promise.all([
         fetch(`${apiBase}/v1/batches${statusParam ? `?${statusParam}` : ""}`),
         fetch(`${apiBase}/v1/components`),
       ]);
+      if (!batchRes.ok || !compRes.ok) {
+        setFetchError(`Failed to load data (batches: ${batchRes.status}, components: ${compRes.status})`);
+      }
       if (batchRes.ok) setBatches(await batchRes.json());
       if (compRes.ok) setComponents(await compRes.json());
-    } catch {
-      // silent
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : "Network error — check your connection and try again.");
     } finally {
       setLoading(false);
     }
@@ -179,7 +185,16 @@ export function BatchPrepBoard() {
   };
 
   if (loading) {
-    return <div className="loading-shimmer" style={{ height: 200, borderRadius: 12 }} />;
+    return (
+      <div className="card" style={{ padding: "var(--sp-5)" }}>
+        <div className="loading-shimmer loading-bar" style={{ width: "40%", height: 18, marginBottom: "var(--sp-4)" }} />
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+          <div className="loading-shimmer" style={{ height: 56, borderRadius: "var(--r-md)" }} />
+          <div className="loading-shimmer" style={{ height: 56, borderRadius: "var(--r-md)" }} />
+          <div className="loading-shimmer" style={{ height: 56, borderRadius: "var(--r-md)" }} />
+        </div>
+      </div>
+    );
   }
 
   // Group batches by component type
@@ -211,6 +226,43 @@ export function BatchPrepBoard() {
           + New Batch
         </button>
       </div>
+
+      {/* Error banner */}
+      {fetchError && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "var(--sp-3)",
+            padding: "var(--sp-3) var(--sp-4)",
+            marginBottom: "var(--sp-4)",
+            background: "var(--c-danger-soft)",
+            color: "var(--c-danger)",
+            border: "1px solid rgba(239,68,68,0.3)",
+            borderRadius: "var(--r-md)",
+            fontSize: "var(--text-sm)",
+          }}
+        >
+          <span>{fetchError}</span>
+          <div style={{ display: "flex", gap: "var(--sp-2)", flexShrink: 0 }}>
+            <button
+              className="btn btn-sm"
+              style={{ background: "var(--c-danger)", color: "#fff" }}
+              onClick={() => { setLoading(true); fetchData(); }}
+            >
+              Retry
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ color: "var(--c-danger)" }}
+              onClick={() => setFetchError(null)}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Batch cards by component family */}
       {typeOrder.map((type) => {
@@ -306,10 +358,22 @@ export function BatchPrepBoard() {
         );
       })}
 
-      {batches.length === 0 && (
+      {batches.length === 0 && !fetchError && (
         <div className="state-box" style={{ textAlign: "center", padding: "var(--sp-8)" }}>
           <div className="state-title">No batches yet</div>
           <div className="state-desc">Create a batch to start prepping components.</div>
+          <Link
+            href={"/kitchen" as any}
+            style={{
+              marginTop: "var(--sp-3)",
+              fontSize: "var(--text-sm)",
+              color: "var(--c-primary)",
+              textDecoration: "none",
+              fontWeight: "var(--weight-medium)",
+            }}
+          >
+            &rarr; Switch to Kitchen Mode for guided execution
+          </Link>
         </div>
       )}
 
