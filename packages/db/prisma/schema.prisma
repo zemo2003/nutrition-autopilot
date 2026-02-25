@@ -327,6 +327,8 @@ model IngredientCatalog {
   defaultUnit    String   @default("g")
   active         Boolean  @default(true)
   allergenTags   String[]
+  parLevelG      Float?
+  reorderPointG  Float?
   createdAt      DateTime @default(now())
   createdBy      String   @default("system")
   updatedAt      DateTime @updatedAt

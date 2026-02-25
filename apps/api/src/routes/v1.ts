@@ -11,6 +11,7 @@ import { parseInstacartOrders, parsePilotMeals, parseSotWorkbook, mapOrderLineTo
 import { getDefaultUser, getPrimaryOrganization } from "../lib/context.js";
 import { freezeLabelFromScheduleDone, buildLineageTree } from "../lib/label-freeze.js";
 import { ensureIdempotency, setIdempotencyResponse } from "../lib/idempotency.js";
+import { computeInventoryProjections, computeDemandForecast, computeWasteSummary, computeAllocationSummary } from "../lib/inventory-projections.js";
 import { runPilotBackfill } from "../lib/pilot-backfill.js";
 import { importResultSchema, verificationTaskSchema } from "@nutrition/contracts";
 
@@ -2120,6 +2121,66 @@ v1Router.patch("/batches/:batchId/status", async (req, res) => {
     ? Math.floor(actualYieldG / batch.portionSizeG)
     : batch.portionCount;
 
+  // ── OI-3: Batch Lot Consumption (FIFO) when moving to IN_PREP ──
+  if (status === "IN_PREP") {
+    // Idempotency: skip if lots already consumed for this batch
+    const existingConsumptions = await prisma.batchLotConsumption.count({
+      where: { batchId },
+    });
+    if (existingConsumptions === 0) {
+      await prisma.$transaction(async (tx) => {
+        const componentLines = await tx.componentLine.findMany({
+          where: { componentId: batch.componentId },
+          include: { ingredient: true },
+        });
+
+        for (const line of componentLines) {
+          let remaining = line.targetGPer100g * (batch.rawInputG / 100);
+
+          const lots = await tx.inventoryLot.findMany({
+            where: {
+              organizationId: batch.organizationId,
+              quantityAvailableG: { gt: 0 },
+              product: { ingredientId: line.ingredientId },
+            },
+            orderBy: [{ expiresAt: "asc" }, { receivedAt: "asc" }],
+          });
+
+          for (const lot of lots) {
+            if (remaining <= 0) break;
+            const use = Math.min(remaining, lot.quantityAvailableG);
+            if (use <= 0) continue;
+
+            await tx.batchLotConsumption.create({
+              data: {
+                batchId,
+                inventoryLotId: lot.id,
+                gramsConsumed: use,
+              },
+            });
+
+            await tx.inventoryLot.update({
+              where: { id: lot.id },
+              data: { quantityAvailableG: { decrement: use } },
+            });
+
+            await tx.inventoryLotLedger.create({
+              data: {
+                inventoryLotId: lot.id,
+                deltaG: -use,
+                reason: "BATCH_CONSUMPTION",
+                referenceId: batchId,
+                createdBy: "system",
+              },
+            });
+
+            remaining -= use;
+          }
+        }
+      });
+    }
+  }
+
   const updated = await prisma.batchProduction.update({
     where: { id: batchId },
     data: {
@@ -2829,4 +2890,59 @@ v1Router.get("/print/daily-summary", async (req, res) => {
       batches: batchList,
     })),
   });
+});
+
+// ── Sprint 1A: Inventory Intelligence Endpoints ──────────────────
+
+v1Router.get("/inventory/projections", async (_req, res) => {
+  const org = await getPrimaryOrganization();
+  const days = parseInt(String(_req.query.days ?? "7"), 10);
+  const projections = await computeInventoryProjections(org.id, days);
+  return res.json({ projections });
+});
+
+v1Router.get("/inventory/demand-forecast", async (_req, res) => {
+  const org = await getPrimaryOrganization();
+  const days = parseInt(String(_req.query.days ?? "7"), 10);
+  const forecast = await computeDemandForecast(org.id, days);
+  return res.json({ forecast });
+});
+
+v1Router.get("/inventory/waste-summary", async (_req, res) => {
+  const org = await getPrimaryOrganization();
+  const lookback = parseInt(String(_req.query.lookback ?? "30"), 10);
+  const waste = await computeWasteSummary(org.id, lookback);
+  return res.json({ waste });
+});
+
+v1Router.get("/inventory/allocation", async (_req, res) => {
+  const org = await getPrimaryOrganization();
+  const allocation = await computeAllocationSummary(org.id);
+  return res.json({ allocation });
+});
+
+v1Router.patch("/inventory/par-levels", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { updates } = req.body as {
+    updates: { ingredientId: string; parLevelG?: number | null; reorderPointG?: number | null }[];
+  };
+
+  if (!Array.isArray(updates) || updates.length === 0) {
+    return res.status(400).json({ error: "updates array is required" });
+  }
+
+  const results = await prisma.$transaction(
+    updates.map((u) =>
+      prisma.ingredientCatalog.update({
+        where: { id: u.ingredientId },
+        data: {
+          ...(u.parLevelG !== undefined ? { parLevelG: u.parLevelG } : {}),
+          ...(u.reorderPointG !== undefined ? { reorderPointG: u.reorderPointG } : {}),
+        },
+        select: { id: true, name: true, parLevelG: true, reorderPointG: true },
+      })
+    )
+  );
+
+  return res.json({ updated: results });
 });

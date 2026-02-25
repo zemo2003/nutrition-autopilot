@@ -4,6 +4,8 @@
   "private": true,
   "description": "USDA fallback nutrient data (54 ingredients × 40 nutrients)",
   "scripts": {
-    "test": "echo 'No tests for data package'"
+    "test": "echo 'No tests for data package'",
+    "typecheck": "echo 'No TypeScript in data package'",
+    "lint": "echo 'No lint for data package'"
   }
 }
