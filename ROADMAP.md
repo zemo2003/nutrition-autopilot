@@ -1,8 +1,8 @@
-# NUMEN MVP MASTER ROADMAP
+# NUMEN MVP MASTER ROADMAP (v2)
 
 ## Purpose
 
-This document is the execution plan for the next build sequence of Numen/Nutrition Autopilot. It is written for direct use by Claude Code inside the repo.
+This document is the execution plan for the next build sequence of Numen / Nutrition Autopilot. It is written for direct use by Claude Code inside the repo.
 
 This is not a greenfield build. This is a structured continuation of an existing working system. Build incrementally. Preserve the current pipeline. Prioritize scientific rigor and operational usability.
 
@@ -14,12 +14,13 @@ When asked to "run full," execute all sprints in sequence without re-planning th
 
 For each sprint:
 1. Inspect current extension points only (schema/API/UI/tests impacted by that sprint)
-2. Implement smallest safe version of required scope
+2. Implement the smallest safe version of required scope
 3. Add/extend tests before UI polish
 4. Run validations + regressions
-5. Update handoff docs
-6. Gate pass/fail
-7. Continue to next sprint only if gate passes
+5. Run deploy verification (if sprint touches API/web/schema)
+6. Update handoff docs + roadmap tracking
+7. Gate pass/fail
+8. Continue to next sprint only if gate passes
 
 If a gate fails:
 * stop advancing to the next sprint
@@ -70,6 +71,18 @@ Do not build:
 * native mobile priority work (Expo remains secondary)
 * speculative autonomous planner behavior that bypasses review
 
+### Explicit Prerequisites / Known Open Issues
+
+The following open issues are treated as roadmap prerequisites or sprint-entry checks:
+
+* **OI-3 (Lot Consumption Wiring)** — required before Inventory Intelligence projections can be considered trustworthy.
+  * Sprint 1A must address or validate this directly.
+  * Inventory projection acceptance criteria are blocked until lot consumption is correctly recorded from batch/prep flows.
+
+* **OI-6 (File Upload Storage Backend)** — required before Sprint 4 document ingestion can be completed.
+  * Decide and implement a storage adapter (e.g., S3/R2/local fallback) before or at the start of Sprint 4.
+  * Sprint 4 must not hardcode storage assumptions into UI/API layers.
+
 ### Required Handoff Files (update every sprint)
 
 * PROGRESS.md
@@ -93,11 +106,28 @@ A sprint is considered gated/passed only if all are true:
 * typecheck green
 * lint green
 * web build green (if UI touched)
-* no regression in import → enrichment → schedule → label freeze
+* no regression in import -> enrichment -> schedule -> label freeze
 * SCIENTIFIC_RISKS.md updated with any new risk/assumption
 * migration/apply status documented if schema changed
+* deploy verification complete (if sprint changes API/web/schema)
+  * Render deploy succeeds
+  * deployed web + API critical routes smoke-tested
+  * deploy timestamp + result logged in ROADMAP_STATUS.md
 
 If any fail, fix or clearly document blocker before continuing.
+
+### Deploy Smoke Test (Required for API/Web/Schema changes)
+
+At minimum verify:
+* API health endpoint responds
+* Web app loads
+* impacted new page/feature route loads
+* one critical action for the sprint succeeds (read/list/create/update as applicable)
+* no obvious runtime errors in deployed logs
+
+Document results in:
+* ROADMAP_STATUS.md
+* MORNING_HANDOFF.md
 
 ### Rollback / Safety Rules
 
@@ -109,57 +139,109 @@ If any fail, fix or clearly document blocker before continuing.
 
 ## Sprint Sequence (Dependency-Ordered)
 
-### Sprint 1 — Inventory Intelligence + Instacart Mapping UX + Substitution Engine (MVP)
+### Sprint 1A — Inventory Intelligence Foundation + OI-3 Lot Consumption Wiring (MVP)
 
 #### Objective
 
-Improve operational reliability and speed in kitchen/admin workflows by adding:
-1. inventory intelligence (projections / allocation / reorder signals)
-2. fast Instacart mapping review UX
-3. practical substitution engine with scientific rigor + auditability
+Establish trustworthy inventory projections by first fixing/validating lot consumption wiring (OI-3), then adding inventory intelligence features that depend on accurate consumption data.
 
 #### Scope (Required)
 
-**A. Inventory Intelligence**
+**A. OI-3 Lot Consumption Wiring (Hard Prerequisite)**
+
+Build / validate end-to-end lot consumption recording from batch/prep and serving flows sufficient to support inventory projections.
+
+Build / Verify:
+* lot consumption events are recorded reliably from relevant flows
+* batch/prep lot usage links to inventory lots (where applicable)
+* serving/freeze flow lot consumption remains intact and auditable
+* quantity deductions are traceable and deterministic
+* no double-deduction on retries/replays (idempotency-safe behavior)
+
+Requirements:
+* projections are blocked from "trusted" status until this passes
+* document any known gaps explicitly in OPEN_ISSUES.md / SCIENTIFIC_RISKS.md
+
+**B. Inventory Intelligence (Foundation)**
 
 Build:
 * projected availability by date/time window using:
-   * inventory lots
-   * meal schedules
-   * batch prep demand
-   * allocations/reservations
+  * inventory lots
+  * meal schedules
+  * batch prep demand
+  * allocations/reservations
+  * validated lot consumption behavior
 * 7-day inventory demand forecast:
-   * by ingredient/component family
-   * required vs available vs shortfall
-* par levels / reorder thresholds (MVP-simple, configurable)
+  * by ingredient/component family
+  * required vs available vs shortfall
 * allocation visibility:
-   * on-hand / allocated / available / projected balance
+  * on-hand / allocated / available / projected balance
+* par levels / reorder thresholds (MVP-simple, configurable)
 * waste analytics (MVP-light):
-   * quantities + counts by reason and ingredient/component
+  * quantities + counts by reason and ingredient/component
 
-UX:
-* surface high-signal states:
-   * shortage this week
-   * critical today
-   * overallocated
-   * expiring soon
-* use clear badges/status colors (do not bury risk in tables)
+**C. Inventory UX Enhancements**
 
-**B. Instacart Mapping UX**
+Surface high-signal operational states clearly:
+* shortage this week
+* critical today
+* overallocated
+* expiring soon
+
+Requirements:
+* clear badges/status colors
+* do not bury risk in tables
+* no hidden assumptions about projection confidence
+
+**D. Scientific QA + Regression Hardening**
+
+Add tests for:
+* lot consumption recording invariants
+* no duplicate lot deductions
+* inventory allocation invariants
+* projection logic correctness
+* deterministic projected balance calculations
+* no impact on served/frozen labels
+* no regression in label freeze pipeline
+
+Extend QA/admin exceptions to show:
+* overallocated inventory
+* projected shortages affecting scheduled meals
+* lot consumption linkage gaps / projection trust warnings
+
+#### Sprint 1A Acceptance Criteria
+
+* OI-3 lot consumption wiring is fixed or explicitly validated and documented
+* inventory projections are traceable and considered trustworthy for MVP use
+* inventory page surfaces projected shortages and overallocation
+* scientific + regression tests pass
+* no label freeze regressions
+* deploy smoke test passes (if API/web/schema changed)
+
+### Sprint 1B — Instacart Mapping UX + Substitution Engine (MVP)
+
+#### Objective
+
+Improve import operations and kitchen resilience with a fast Instacart mapping workflow and a practical, auditable substitution engine.
+
+#### Scope (Required)
+
+**A. Instacart Mapping UX**
 
 Build:
 * unmapped line item queue (sortable/filterable)
-* candidate match suggestions ranked by confidence:
-   * UPC exact
-   * normalized name similarity
-   * brand match
-   * size/unit similarity
-   * historical accepted mappings
+* candidate match suggestions ranked by confidence using deterministic weighted scoring:
+  * UPC exact match
+  * normalized name similarity
+  * brand match
+  * size/unit similarity
+  * historical accepted mappings
+* explainable confidence scoring (show score factors)
 * one-click actions:
-   * approve suggested match
-   * search/select different existing SKU/ingredient
-   * create new SKU + link to canonical ingredient
-   * mark pantry/non-tracked with reason
+  * approve suggested match
+  * search/select different existing SKU/ingredient
+  * create new SKU + link to canonical ingredient
+  * mark pantry/non-tracked with reason
 * mapping memory / learned mappings
 * dry-run + apply workflow
 
@@ -168,7 +250,7 @@ Requirements:
 * preserve provenance/confidence metadata
 * record mapping resolution source (manual vs auto-suggest accepted)
 
-**C. Substitution Engine (MVP)**
+**B. Substitution Engine (MVP)**
 
 Build substitution suggestions for planned meals/batches using:
 * same component family
@@ -189,36 +271,41 @@ Constraints:
 * no changes to served/frozen labels
 * warnings when uncertainty is high
 
-**D. Scientific QA + Regression Hardening**
+**C. Scientific QA + Regression Hardening**
 
 Add tests for:
-* inventory allocation invariants
-* projection logic correctness
 * mapping memory + idempotency preservation
+* deterministic confidence scoring behavior
+* duplicate mapping application prevention
 * substitution constraints/ranking/deltas
 * deterministic nutrient recalculation post-substitution
 * rounding + calorie sanity after substitution
 * no impact on served/frozen labels
+* no regression in label freeze pipeline
 
 Extend QA/admin exceptions to show:
 * unresolved mapping queue counts
-* overallocated inventory
 * substitution warnings
-* projected shortages affecting scheduled meals
+* projected shortages (from Sprint 1A) impacting substitution demand
 
-#### Sprint 1 Acceptance Criteria
+#### Sprint 1B Acceptance Criteria
 
 * Instacart mapping review queue is usable end-to-end
-* inventory page surfaces projected shortages and overallocation
+* mapping suggestions are explainable and deterministic
 * substitutions can be previewed and applied to future plans only
-* scientific and regression tests pass
+* scientific + regression tests pass
 * no label freeze regressions
+* deploy smoke test passes (if API/web/schema changed)
 
-### Sprint 2 — Batch Yield Calibration + Cook/Chill QC Telemetry (MVP)
+### Sprint 2 — Batch Yield Calibration + Cook/Chill QC Telemetry Extensions (MVP)
 
 #### Objective
 
-Replace static yield assumptions with measured production data and capture QC checkpoints that improve scientific rigor and planning accuracy.
+Extend the existing batch checkpoint / kitchen execution telemetry into a measured calibration and QC system:
+* use already-built checkpoint logging/timers as the baseline
+* add calibration history, variance analytics, QC gating rules, and planning integration
+
+Do not rebuild the existing Kitchen Execution Mode checkpoint flow unless required for compatibility.
 
 #### Scope (Required)
 
@@ -227,27 +314,27 @@ Replace static yield assumptions with measured production data and capture QC ch
 Build:
 * yield profile history (expected %, actual %, variance, sample count, confidence)
 * calibration dimensions (MVP):
-   * component/batch type
-   * method
-   * optional cut/form factor
+  * component/batch type
+  * method
+  * optional cut/form factor
 * suggested yield update workflow (human accept required)
 * outlier handling (flag + exclude from calibration proposal)
 
-**B. Cook/Chill QC Telemetry**
+**B. Cook/Chill QC Telemetry (Extension of Existing Checkpoint System)**
 
-Build:
-* checkpoint logging:
-   * cook start/end
-   * target vs actual temp
-   * chill start/end
-   * chill compliance
-   * hold status/notes
+Extend the current checkpoint/timer implementation with:
+* richer checkpoint logging:
+  * cook start/end
+  * target vs actual temp
+  * chill start/end
+  * chill compliance
+  * hold status/notes
 * step requirements before state transitions (MVP-simple)
 * issue flags:
-   * temp miss
-   * chill time exceeded
-   * missing/late checkpoint
-   * manual override with reason
+  * temp miss
+  * chill time exceeded
+  * missing/late checkpoint
+  * manual override with reason
 
 **C. Batch Variance Analytics**
 
@@ -287,24 +374,42 @@ Extend QA/admin exceptions to show:
 
 #### Sprint 2 Acceptance Criteria
 
-* checkpoint data can be logged in kitchen flow
+* existing checkpoint flow remains intact and extended (not rebuilt unnecessarily)
+* checkpoint data can be logged in kitchen flow with QC rules
 * calibrated yields are proposed and reviewable
 * planning can use calibrated yields with explicit traceability
 * QA surfaces QC misses and calibration risks
 * tests/regressions green
+* deploy smoke test passes (if API/web/schema changed)
 
-### Sprint 3 — Menu Composer + Weekly Prep Optimizer + Sauce Matrix (MVP)
+### Sprint 3 — Recipe/Composition Compatibility Layer + Menu Composer + Weekly Prep Optimizer + Sauce Matrix (MVP)
 
 #### Objective
 
-Operationalize composition-first planning:
-* standardized components (protein/base/veg/sauce)
-* minimized prep complexity
-* personalized flavor via sauces
+Operationalize composition-first planning while preserving recipe-first scheduling and freeze/label behavior.
+
+This sprint contains the highest architectural risk in the roadmap and must explicitly solve recipe-first + composition-first coexistence.
 
 #### Scope (Required)
 
-**A. Menu Composer**
+**A. Recipe-First + Composition-First Compatibility Layer (First-Class Scope)**
+
+Before full composer/planner UI work, implement the compatibility contract for scheduled meals and label generation.
+
+Build:
+* a discriminated meal source model at scheduling/planning boundaries:
+  * Recipe
+  * ComponentComposition (or equivalent)
+* a common nutrient input interface/adapter for label computation (e.g., NutrientInputSet)
+* freeze snapshot metadata indicating source type used at freeze time
+* a clear coexistence path so recipe-first and composition-first meals produce equivalent downstream contracts
+
+Requirements:
+* no mutation of immutable label snapshots
+* no patching composition data into recipe-shaped structures without explicit adapter logic
+* traceability remains intact for both source types
+
+**B. Menu Composer**
 
 Build a composition-first planner:
 * choose protein/base/veg/sauce
@@ -315,7 +420,7 @@ Build a composition-first planner:
 * allergen/incompatibility warnings
 * flavor swaps via sauce variants without duplicating core prep assumptions
 
-**B. Weekly Prep Optimizer (MVP heuristic)**
+**C. Weekly Prep Optimizer (MVP heuristic)**
 
 Build:
 * 7-day component demand rollup
@@ -325,25 +430,25 @@ Build:
 * prep draft generation (review before commit)
 * shortage/blocker surfacing integrated with inventory intelligence
 
-**C. Sauce Matrix**
+**D. Sauce Matrix**
 
 Build:
 * sauce matrix UI:
-   * flavor family
-   * macro variant
-   * compatibility tags
+  * flavor family
+  * macro variant
+  * compatibility tags
 * default sauce assignments for component combinations/templates
 * portion presets (5g/10g/15g/20g...) with macro delta preview
 * flavor rotation support (MVP-light) to reduce repetition
 
-**D. Schedule Integration (coexist recipe-first + composition-first)**
+**E. Schedule Integration (Recipe + Composition Coexistence UX)**
 
-Build compatibility path so planned meals can use composition templates without breaking existing recipe-based schedule flow.
+Build compatibility path in scheduling UI/API so planned meals can use composition templates without breaking the existing recipe-based schedule flow.
 
 Requirements:
 * preserve label freeze and nutrient traceability
 * preserve QA visibility
-* if compatibility layer is needed, implement and document clearly
+* if a compatibility layer/bridge is needed, implement and document clearly
 
 #### Scientific QA + Tests
 
@@ -354,22 +459,26 @@ Add tests for:
 * inventory shortage detection in planning
 * compatibility/allergen warning logic
 * recipe-first + composition-first coexistence behavior
+* freeze snapshot source-type metadata correctness
 * no regression in label freeze pipeline
 
 Extend QA/admin warnings for:
 * composition templates with estimated nutrient inputs
 * rollups using low-confidence yields
 * shortages blocking prep draft generation
+* source-type compatibility issues (if any)
 
 #### Sprint 3 Acceptance Criteria
 
+* recipe-first and composition-first scheduled meals both flow through freeze/label path with explicit source-type traceability
 * composition templates can be created and previewed
 * weekly prep rollup produces usable batch suggestions
 * sauce matrix supports practical personalization
 * existing schedule/label flow still works
 * tests/regressions green
+* deploy smoke test passes (if API/web/schema changed)
 
-### Sprint 4 — Client Biometrics Timeline + DEXA/Bloodwork/CGM Ingestion Layer (MVP)
+### Sprint 4 — File Storage Adapter + Client Biometrics Timeline + DEXA/Bloodwork/CGM Ingestion Layer (MVP)
 
 #### Objective
 
@@ -379,24 +488,41 @@ This sprint is storage/indexing/timeline-first. Do not fake parsers.
 
 #### Scope (Required)
 
-**A. Client Biometrics Timeline**
+**A. File Storage Adapter (MVP Infrastructure)**
+
+Implement a storage abstraction for client documents before building document upload workflows.
+
+Build:
+* storage adapter interface (upload/read/delete metadata hooks as needed)
+* at least one backend implementation:
+  * local/dev storage (required)
+  * cloud backend (S3/R2/etc.) if available
+* file metadata persistence integrated with client document records
+* environment-driven configuration (no hardcoded provider assumptions)
+
+Requirements:
+* UI/API layers must use the adapter, not provider-specific code
+* document ingestion must work in local/dev mode
+* storage errors must be explicit and non-destructive
+
+**B. Client Biometrics Timeline**
 
 Build:
 * biometric snapshots (date-stamped)
-   * height
-   * weight
-   * body fat % (optional)
-   * lean mass (optional)
-   * notes/source
+  * height
+  * weight
+  * body fat % (optional)
+  * lean mass (optional)
+  * notes/source
 * timeline UI:
-   * chronological records
-   * latest values summary
-   * add/edit snapshots
-   * missing/irregular data indicators
+  * chronological records
+  * latest values summary
+  * add/edit snapshots
+  * missing/irregular data indicators
 * trend preview (MVP-light):
-   * up/down/stable indicators
+  * up/down/stable indicators
 
-**B. Document Ingestion Layer**
+**C. Document Ingestion Layer**
 
 Build structured client document records:
 * type (DEXA, BLOODWORK, CGM, OTHER)
@@ -415,7 +541,7 @@ Add upload/management UI:
 * add notes
 * filter/search by type/date/status
 
-**C. Parsed Metrics Scaffold (future-ready, MVP-safe)**
+**D. Parsed Metrics Scaffold (future-ready, MVP-safe)**
 
 Create normalized metric series storage:
 * metric key
@@ -433,7 +559,7 @@ Add manual entry path for common metrics (MVP):
 
 No fake parsing. Keep explicit manual/placeholder workflow when parser is absent.
 
-**D. QA/Admin Integration**
+**E. QA/Admin Integration**
 
 Surface:
 * missing recent biometrics
@@ -444,6 +570,7 @@ Surface:
 #### Scientific QA + Tests
 
 Add tests for:
+* storage adapter usage and error handling paths (MVP integration-level where practical)
 * time-series ordering and latest selection
 * document metadata integrity
 * metric linkage to source documents
@@ -455,11 +582,13 @@ No silent unit assumptions; keep source + verification states explicit.
 
 #### Sprint 4 Acceptance Criteria
 
+* file uploads use storage adapter abstraction (not provider-specific UI/API coupling)
 * client timeline usable
-* document upload/metadata workflow usable
+* document upload/metadata workflow usable in local/dev mode
 * metrics can be stored with provenance/verification
 * QA warns on stale/unverified data
 * tests/regressions green
+* deploy smoke test passes (if API/web/schema changed)
 
 ### Sprint 5 — Audit Trace + Reproducibility + Ops Control Tower (MVP)
 
@@ -501,25 +630,25 @@ No mutation of snapshots. Diff-only.
 
 Build a single high-signal dashboard with sections:
 * Today:
-   * meals due
-   * batches due/active/blocked
-   * shortages/overallocations
-   * expiring inventory
+  * meals due
+  * batches due/active/blocked
+  * shortages/overallocations
+  * expiring inventory
 * Scientific QA:
-   * unresolved verification tasks
-   * estimated/inferred nutrient counts
-   * missing provenance/incomplete coverage
-   * substitution warnings pending review
-   * calibration/QC override review items
+  * unresolved verification tasks
+  * estimated/inferred nutrient counts
+  * missing provenance/incomplete coverage
+  * substitution warnings pending review
+  * calibration/QC override review items
 * Client Data Readiness:
-   * stale biometrics/docs
-   * unverified uploads
+  * stale biometrics/docs
+  * unverified uploads
 * System Reliability (MVP-light):
-   * failed imports
-   * failed enrichment jobs
-   * stuck statuses
+  * failed imports
+  * failed enrichment jobs
+  * stuck statuses
 * Attention Queue:
-   * top actionable issues with direct links
+  * top actionable issues with direct links
 
 **D. Exportable Review Packs (MVP)**
 
@@ -547,20 +676,20 @@ Add tests for:
 * control tower surfaces highest-risk issues clearly
 * export/print review views are usable
 * tests/regressions green
+* deploy smoke test passes (if API/web/schema changed)
 
 ## Full-Run Execution Protocol (Claude Code)
 
 ### Start Sequence
 
 1. Read this file.
-2. Detect current codebase state and which sprint is next.
-3. If no sprint-tracking marker exists, start at Sprint 1.
-4. Create/update a sprint tracking file:
+2. Read ROADMAP_STATUS.md.
+3. Detect current codebase state and which sprint is next.
+4. If no sprint-tracking marker exists, create/update:
    * ROADMAP_STATUS.md
-   * mark current sprint, status, gate result, notes
 5. Execute current sprint.
 6. Run gate.
-7. If gate passes, advance ROADMAP_STATUS.md and continue.
+7. If gate passes, update ROADMAP_STATUS.md and continue.
 8. If gate fails, stop advancement and document blockers precisely.
 
 ### Sprint Tracking Format (use this exact shape)
@@ -571,6 +700,12 @@ Maintain ROADMAP_STATUS.md with:
 * Last completed gate timestamp
 * Blockers
 * Next action
+* Latest deploy verification:
+  * Required for current sprint (yes/no)
+  * Deploy status (not_run, passed, failed)
+  * Environment (feature, staging, production)
+  * Deploy timestamp
+  * Smoke test summary
 
 ### Implementation Discipline
 
@@ -580,6 +715,7 @@ For each sprint:
 * add tests for invariants before UI polish
 * implement UI
 * run validations/regressions
+* run deploy verification (if applicable)
 * update docs
 * commit checkpoint(s)
 
@@ -590,7 +726,7 @@ Discover and use repo-native commands from package.json / workspace scripts. Doc
 ### Stop/Ship Criteria for MVP Funding Demo
 
 The roadmap can be considered demo-ready when all are true:
-* Sprints 1-5 gated pass
+* Sprints 1A, 1B, 2, 3, 4, 5 gated pass
 * core pipeline remains stable
 * chef/admin PWA workflows are usable in real kitchen simulation
 * scientific QA and audit trace are visible and trustworthy
