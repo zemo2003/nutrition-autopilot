@@ -6,7 +6,7 @@ import { execFile as execFileCb } from "node:child_process";
 import express from "express";
 import multer from "multer";
 import { addHours, endOfMonth, parse, startOfMonth } from "date-fns";
-import { prisma, NutrientSourceType, VerificationStatus, VerificationTaskStatus, VerificationTaskSeverity, ScheduleStatus } from "@nutrition/db";
+import { prisma, NutrientSourceType, VerificationStatus, VerificationTaskStatus, VerificationTaskSeverity, ScheduleStatus, BatchStatus, ComponentType, StorageLocation } from "@nutrition/db";
 import { parseInstacartOrders, parsePilotMeals, parseSotWorkbook, mapOrderLineToIngredient } from "@nutrition/importers";
 import { getDefaultUser, getPrimaryOrganization } from "../lib/context.js";
 import { freezeLabelFromScheduleDone, buildLineageTree } from "../lib/label-freeze.js";
@@ -1624,14 +1624,17 @@ v1Router.get("/quality/summary", async (req, res) => {
       finalLabelFull40CoverageRatio: finalLabels.length ? completeLabelNutrientCoverage / finalLabels.length : 0
     },
     evidence: {
+      verifiedRows,
       inferredRows,
       exceptionRows,
-      verifiedRows,
+      floorRows,
       provisionalLabels,
-      floorRows
+      totalLabelsServed: finalLabels.length
     },
     syntheticUsage: {
-      lotConsumptionEvents: syntheticUsageCount
+      syntheticLots: syntheticUsageCount,
+      totalLots: consumptions.length,
+      syntheticLotRatio: consumptions.length > 0 ? syntheticUsageCount / consumptions.length : 0
     }
   });
 });
@@ -1678,7 +1681,13 @@ v1Router.get("/labels/stale", async (req, res) => {
 
     return res.json({
       staleCount: staleLabels.length,
-      labels: staleLabels
+      labels: staleLabels,
+      staleLabels: staleLabels.map((l) => ({
+        labelId: l.labelId,
+        title: l.labelTitle,
+        frozenAt: l.frozenAt,
+        staleNutrients: l.staleDays,
+      })),
     });
   } catch (error) {
     return res.status(500).json({
@@ -1700,14 +1709,17 @@ v1Router.get("/verification/tasks", async (req, res) => {
 
   const status = statusRaw && Object.values(VerificationTaskStatus).includes(statusRaw as VerificationTaskStatus)
     ? (statusRaw as VerificationTaskStatus) : undefined;
-  const severity = severityRaw && Object.values(VerificationTaskSeverity).includes(severityRaw as VerificationTaskSeverity)
-    ? (severityRaw as VerificationTaskSeverity) : undefined;
+  const severities = severityRaw
+    ? severityRaw.split(",").filter((s): s is VerificationTaskSeverity =>
+        Object.values(VerificationTaskSeverity).includes(s as VerificationTaskSeverity)
+      )
+    : undefined;
 
   const tasks = await prisma.verificationTask.findMany({
     where: {
       organizationId: org.id,
       ...(status ? { status } : {}),
-      ...(severity ? { severity } : {})
+      ...(severities?.length ? { severity: { in: severities } } : {})
     },
     orderBy: [{ severity: "desc" }, { createdAt: "asc" }],
     include: { reviews: true }
@@ -1828,4 +1840,445 @@ v1Router.patch("/verification/tasks/:id", async (req, res) => {
   }
 
   return res.json({ id: task.id, status: task.status });
+});
+
+// ── Kitchen Ops: Inventory ─────────────────────────────────────
+
+v1Router.get("/inventory", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const storageLocation = typeof req.query.storageLocation === "string"
+    ? req.query.storageLocation.toUpperCase()
+    : undefined;
+
+  const lots = await prisma.inventoryLot.findMany({
+    where: {
+      organizationId: org.id,
+      quantityAvailableG: { gt: 0 },
+      ...(storageLocation && Object.values(StorageLocation).includes(storageLocation as StorageLocation)
+        ? { storageLocation: storageLocation as StorageLocation }
+        : {}),
+    },
+    include: {
+      product: {
+        include: { ingredient: true },
+      },
+    },
+    orderBy: [{ expiresAt: "asc" }, { receivedAt: "desc" }],
+  });
+
+  return res.json(
+    lots.map((lot) => ({
+      id: lot.id,
+      productName: lot.product.name,
+      ingredientName: lot.product.ingredient.name,
+      lotCode: lot.lotCode,
+      receivedAt: lot.receivedAt,
+      expiresAt: lot.expiresAt,
+      quantityReceivedG: lot.quantityReceivedG,
+      quantityAvailableG: lot.quantityAvailableG,
+      storageLocation: lot.storageLocation,
+      sourceOrderRef: lot.sourceOrderRef,
+    }))
+  );
+});
+
+v1Router.get("/inventory/alerts", async (_req, res) => {
+  const org = await getPrimaryOrganization();
+  const now = new Date();
+  const threeDaysOut = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+
+  const lots = await prisma.inventoryLot.findMany({
+    where: {
+      organizationId: org.id,
+      quantityAvailableG: { gt: 0 },
+    },
+    include: { product: true },
+  });
+
+  const alerts: Array<{ lotId: string; productName: string; alertType: string; details: string }> = [];
+
+  for (const lot of lots) {
+    // Low stock: less than 100g remaining
+    if (lot.quantityAvailableG < 100) {
+      alerts.push({
+        lotId: lot.id,
+        productName: lot.product.name,
+        alertType: "LOW_STOCK",
+        details: `Only ${Math.round(lot.quantityAvailableG)}g remaining`,
+      });
+    }
+    // Expiring soon: within 3 days
+    if (lot.expiresAt && lot.expiresAt <= threeDaysOut) {
+      const daysLeft = Math.max(0, Math.round((lot.expiresAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)));
+      alerts.push({
+        lotId: lot.id,
+        productName: lot.product.name,
+        alertType: "EXPIRING_SOON",
+        details: daysLeft === 0 ? "Expires today" : `Expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`,
+      });
+    }
+  }
+
+  return res.json(alerts);
+});
+
+v1Router.post("/inventory/adjust", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const user = await getDefaultUser();
+  const { lotId, deltaG, reason, notes } = req.body as {
+    lotId?: string;
+    deltaG?: number;
+    reason?: string;
+    notes?: string;
+  };
+
+  if (!lotId || typeof deltaG !== "number" || !reason) {
+    return res.status(400).json({ error: "lotId, deltaG, and reason are required" });
+  }
+
+  const lot = await prisma.inventoryLot.findFirst({
+    where: { id: lotId, organizationId: org.id },
+  });
+  if (!lot) {
+    return res.status(404).json({ error: "Lot not found" });
+  }
+
+  const newAvailable = lot.quantityAvailableG + deltaG;
+  if (newAvailable < 0) {
+    return res.status(400).json({ error: "Adjustment would result in negative quantity" });
+  }
+
+  await prisma.$transaction([
+    prisma.inventoryLot.update({
+      where: { id: lotId },
+      data: { quantityAvailableG: newAvailable, version: { increment: 1 } },
+    }),
+    prisma.inventoryLotLedger.create({
+      data: {
+        inventoryLotId: lotId,
+        deltaG,
+        reason: `${reason}${notes ? `: ${notes}` : ""}`,
+        referenceId: `manual-${Date.now()}`,
+        createdBy: user.email,
+      },
+    }),
+  ]);
+
+  return res.json({ lotId, newAvailableG: newAvailable });
+});
+
+// ── Kitchen Ops: Components ────────────────────────────────────
+
+v1Router.get("/components", async (_req, res) => {
+  const org = await getPrimaryOrganization();
+
+  const components = await prisma.component.findMany({
+    where: { organizationId: org.id, active: true },
+    include: { _count: { select: { lines: true } } },
+    orderBy: [{ componentType: "asc" }, { name: "asc" }],
+  });
+
+  return res.json(
+    components.map((c) => ({
+      id: c.id,
+      name: c.name,
+      componentType: c.componentType,
+      defaultYieldFactor: c.defaultYieldFactor,
+      lineCount: c._count.lines,
+    }))
+  );
+});
+
+// ── Kitchen Ops: Batch Prep ────────────────────────────────────
+
+v1Router.get("/batches", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const statusRaw = typeof req.query.status === "string" ? req.query.status.toUpperCase() : undefined;
+  const statuses = statusRaw
+    ? statusRaw.split(",").filter((s): s is BatchStatus =>
+        Object.values(BatchStatus).includes(s as BatchStatus)
+      )
+    : undefined;
+
+  const batches = await prisma.batchProduction.findMany({
+    where: {
+      organizationId: org.id,
+      ...(statuses?.length ? { status: { in: statuses } } : {}),
+    },
+    include: { component: true },
+    orderBy: [{ plannedDate: "desc" }, { createdAt: "desc" }],
+  });
+
+  return res.json(
+    batches.map((b) => ({
+      id: b.id,
+      componentName: b.component.name,
+      componentType: b.component.componentType,
+      status: b.status,
+      plannedDate: b.plannedDate.toISOString().slice(0, 10),
+      batchCode: b.batchCode,
+      rawInputG: b.rawInputG,
+      expectedYieldG: b.expectedYieldG,
+      actualYieldG: b.actualYieldG,
+      yieldVariance: b.yieldVariance,
+      portionCount: b.portionCount,
+      portionSizeG: b.portionSizeG,
+      cookTempC: b.cookTempC,
+      cookTimeMin: b.cookTimeMin,
+      notes: b.notes,
+    }))
+  );
+});
+
+v1Router.post("/batches", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const user = await getDefaultUser();
+  const { componentId, rawInputG, portionSizeG, plannedDate } = req.body as {
+    componentId?: string;
+    rawInputG?: number;
+    portionSizeG?: number;
+    plannedDate?: string;
+  };
+
+  if (!componentId || typeof rawInputG !== "number" || !plannedDate) {
+    return res.status(400).json({ error: "componentId, rawInputG, and plannedDate are required" });
+  }
+
+  const component = await prisma.component.findFirst({
+    where: { id: componentId, organizationId: org.id },
+  });
+  if (!component) {
+    return res.status(404).json({ error: "Component not found" });
+  }
+
+  const expectedYieldG = rawInputG * component.defaultYieldFactor;
+  const portionCount = portionSizeG && portionSizeG > 0
+    ? Math.floor(expectedYieldG / portionSizeG)
+    : null;
+
+  const batch = await prisma.batchProduction.create({
+    data: {
+      organizationId: org.id,
+      componentId,
+      rawInputG,
+      expectedYieldG,
+      portionSizeG: portionSizeG ?? null,
+      portionCount,
+      plannedDate: parseDateOnlyUtc(plannedDate),
+      status: "PLANNED",
+      createdBy: user.email,
+    },
+  });
+
+  return res.json({
+    id: batch.id,
+    componentName: component.name,
+    componentType: component.componentType,
+    status: batch.status,
+    plannedDate: batch.plannedDate.toISOString().slice(0, 10),
+    rawInputG: batch.rawInputG,
+    expectedYieldG: batch.expectedYieldG,
+    portionCount: batch.portionCount,
+    portionSizeG: batch.portionSizeG,
+  });
+});
+
+v1Router.patch("/batches/:batchId/status", async (req, res) => {
+  const { batchId } = req.params;
+  const { status, actualYieldG } = req.body as {
+    status?: string;
+    actualYieldG?: number;
+  };
+
+  if (!status) {
+    return res.status(400).json({ error: "status is required" });
+  }
+  if (!Object.values(BatchStatus).includes(status as BatchStatus)) {
+    return res.status(400).json({ error: `Invalid status: ${status}` });
+  }
+
+  const batch = await prisma.batchProduction.findUnique({ where: { id: batchId } });
+  if (!batch) {
+    return res.status(404).json({ error: "Batch not found" });
+  }
+
+  const yieldVariance = typeof actualYieldG === "number" && batch.expectedYieldG > 0
+    ? (actualYieldG - batch.expectedYieldG) / batch.expectedYieldG
+    : batch.yieldVariance;
+
+  const portionCount = typeof actualYieldG === "number" && batch.portionSizeG && batch.portionSizeG > 0
+    ? Math.floor(actualYieldG / batch.portionSizeG)
+    : batch.portionCount;
+
+  const updated = await prisma.batchProduction.update({
+    where: { id: batchId },
+    data: {
+      status: status as BatchStatus,
+      ...(typeof actualYieldG === "number" ? { actualYieldG } : {}),
+      ...(yieldVariance !== batch.yieldVariance ? { yieldVariance } : {}),
+      ...(portionCount !== batch.portionCount ? { portionCount } : {}),
+      ...(status === "READY" ? { completedAt: new Date() } : {}),
+      version: { increment: 1 },
+    },
+    include: { component: true },
+  });
+
+  return res.json({
+    id: updated.id,
+    componentName: updated.component.name,
+    componentType: updated.component.componentType,
+    status: updated.status,
+    rawInputG: updated.rawInputG,
+    expectedYieldG: updated.expectedYieldG,
+    actualYieldG: updated.actualYieldG,
+    yieldVariance: updated.yieldVariance,
+    portionCount: updated.portionCount,
+  });
+});
+
+// ── Kitchen Ops: Client Profile ────────────────────────────────
+
+v1Router.get("/clients/:clientId", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { clientId } = req.params;
+
+  const client = await prisma.client.findFirst({
+    where: { id: clientId, organizationId: org.id },
+  });
+  if (!client) {
+    return res.status(404).json({ error: "Client not found" });
+  }
+
+  return res.json({
+    id: client.id,
+    fullName: client.fullName,
+    email: client.email,
+    phone: client.phone,
+    heightCm: client.heightCm,
+    weightKg: client.weightKg,
+    goals: client.goals,
+    preferences: client.preferences,
+    exclusions: client.exclusions,
+    timezone: client.timezone,
+    active: client.active,
+    bodyCompositionSnapshots: client.bodyCompositionSnapshots ?? [],
+    fileRecords: client.fileRecords ?? [],
+  });
+});
+
+v1Router.patch("/clients/:clientId", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { clientId } = req.params;
+  const { email, phone, heightCm, weightKg, goals, preferences, exclusions } = req.body as {
+    email?: string;
+    phone?: string;
+    heightCm?: number;
+    weightKg?: number;
+    goals?: string;
+    preferences?: string;
+    exclusions?: string[];
+  };
+
+  const client = await prisma.client.findFirst({
+    where: { id: clientId, organizationId: org.id },
+  });
+  if (!client) {
+    return res.status(404).json({ error: "Client not found" });
+  }
+
+  const updated = await prisma.client.update({
+    where: { id: clientId },
+    data: {
+      ...(email !== undefined ? { email } : {}),
+      ...(phone !== undefined ? { phone } : {}),
+      ...(typeof heightCm === "number" ? { heightCm } : {}),
+      ...(typeof weightKg === "number" ? { weightKg } : {}),
+      ...(goals !== undefined ? { goals } : {}),
+      ...(preferences !== undefined ? { preferences } : {}),
+      ...(Array.isArray(exclusions) ? { exclusions } : {}),
+      version: { increment: 1 },
+    },
+  });
+
+  return res.json({
+    id: updated.id,
+    fullName: updated.fullName,
+    email: updated.email,
+    phone: updated.phone,
+    heightCm: updated.heightCm,
+    weightKg: updated.weightKg,
+    goals: updated.goals,
+    preferences: updated.preferences,
+    exclusions: updated.exclusions,
+  });
+});
+
+v1Router.post("/clients/:clientId/body-composition", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { clientId } = req.params;
+  const { date, bodyFatPct, leanMassKg, source } = req.body as {
+    date?: string;
+    bodyFatPct?: number;
+    leanMassKg?: number;
+    source?: string;
+  };
+
+  if (!date || !source) {
+    return res.status(400).json({ error: "date and source are required" });
+  }
+
+  const client = await prisma.client.findFirst({
+    where: { id: clientId, organizationId: org.id },
+  });
+  if (!client) {
+    return res.status(404).json({ error: "Client not found" });
+  }
+
+  const existing = Array.isArray(client.bodyCompositionSnapshots) ? client.bodyCompositionSnapshots : [];
+  const newSnapshot = { date, bodyFatPct: bodyFatPct ?? null, leanMassKg: leanMassKg ?? null, source, createdAt: new Date().toISOString() };
+
+  await prisma.client.update({
+    where: { id: clientId },
+    data: {
+      bodyCompositionSnapshots: [...existing, newSnapshot] as unknown as import("@prisma/client").Prisma.InputJsonValue,
+      version: { increment: 1 },
+    },
+  });
+
+  return res.json(newSnapshot);
+});
+
+v1Router.post("/clients/:clientId/file-records", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { clientId } = req.params;
+  const { date, type, fileName, notes } = req.body as {
+    date?: string;
+    type?: string;
+    fileName?: string;
+    notes?: string;
+  };
+
+  if (!date || !type || !fileName) {
+    return res.status(400).json({ error: "date, type, and fileName are required" });
+  }
+
+  const client = await prisma.client.findFirst({
+    where: { id: clientId, organizationId: org.id },
+  });
+  if (!client) {
+    return res.status(404).json({ error: "Client not found" });
+  }
+
+  const existing = Array.isArray(client.fileRecords) ? client.fileRecords : [];
+  const newRecord = { date, type, fileName, notes: notes ?? null, createdAt: new Date().toISOString() };
+
+  await prisma.client.update({
+    where: { id: clientId },
+    data: {
+      fileRecords: [...existing, newRecord] as unknown as import("@prisma/client").Prisma.InputJsonValue,
+      version: { increment: 1 },
+    },
+  });
+
+  return res.json(newRecord);
 });
