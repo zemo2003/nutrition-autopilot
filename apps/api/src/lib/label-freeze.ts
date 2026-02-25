@@ -19,6 +19,7 @@ const reasonCodeOrder = [
   "PLAUSIBILITY_ERROR",
   "PLAUSIBILITY_WARNING",
   "UNVERIFIED_SOURCE",
+  "INCOMPLETE_CORE_NUTRIENTS",
   "HISTORICAL_EXCEPTION",
   "SYNTHETIC_LOT_USAGE"
 ] as const;
@@ -57,6 +58,7 @@ type ConsumedLot = {
   ingredientAllergens: string[];
   ingredientId: string;
   syntheticLot: boolean;
+  incompleteNutrients: boolean;
 };
 
 type EvidenceSummary = {
@@ -130,7 +132,7 @@ function sortReasonCodes(values: Iterable<ReasonCode>): ReasonCode[] {
   return reasonCodeOrder.filter((code) => incoming.has(code));
 }
 
-function summarizeEvidence(rows: NutrientRow[], syntheticLot: boolean): EvidenceDetails {
+function summarizeEvidence(rows: NutrientRow[], syntheticLot: boolean, incompleteNutrients = false): EvidenceDetails {
   const gradeBreakdown: Record<string, number> = {};
   const sourceRefs = new Set<string>();
   const reasonCodes = new Set<ReasonCode>();
@@ -166,8 +168,12 @@ function summarizeEvidence(rows: NutrientRow[], syntheticLot: boolean): Evidence
     reasonCodes.add("HISTORICAL_EXCEPTION");
   }
 
+  if (incompleteNutrients) {
+    reasonCodes.add("INCOMPLETE_CORE_NUTRIENTS");
+  }
+
   const totalNutrientRows = rows.length;
-  const provisional = unverifiedCount > 0 || exceptionCount > 0 || inferredCount > 0 || syntheticLot;
+  const provisional = unverifiedCount > 0 || exceptionCount > 0 || inferredCount > 0 || syntheticLot || incompleteNutrients;
 
   return {
     summary: {
@@ -417,7 +423,10 @@ export async function freezeLabelFromScheduleDone(input: {
         );
         const hasRequiredCore = coreQualityKeys.every((key) => corePresent.has(key));
 
-        if (strictMode && (!hasRequiredCore || syntheticLot || nutrientRows.some((row) => row.historicalException))) {
+        // In strict mode, block only synthetic lots and historical exceptions.
+        // Real imported lots with incomplete nutrients are allowed but flagged —
+        // the label will be marked provisional downstream via evidenceSummary.
+        if (strictMode && (syntheticLot || nutrientRows.some((row) => row.historicalException))) {
           continue;
         }
 
@@ -464,7 +473,8 @@ export async function freezeLabelFromScheduleDone(input: {
           ingredientName: line.ingredient.name,
           ingredientAllergens: line.ingredient.allergenTags,
           ingredientId: line.ingredient.id,
-          syntheticLot
+          syntheticLot,
+          incompleteNutrients: !hasRequiredCore
         });
 
         remaining -= use;
@@ -473,7 +483,7 @@ export async function freezeLabelFromScheduleDone(input: {
       if (remaining > 0) {
         if (strictMode) {
           throw new Error(
-            `Quality gate blocked freeze for ingredient ${line.ingredient.name}; require non-synthetic lots with complete core nutrients`
+            `Quality gate blocked freeze for ingredient ${line.ingredient.name}; only synthetic or historical-exception lots available (need real inventory)`
           );
         }
         throw new Error(`Insufficient lot quantity for ingredient ${line.ingredient.name}`);
@@ -482,7 +492,8 @@ export async function freezeLabelFromScheduleDone(input: {
 
     const skuEvidence = summarizeEvidence(
       consumedLots.flatMap((lot) => lot.nutrients),
-      consumedLots.some((lot) => lot.syntheticLot)
+      consumedLots.some((lot) => lot.syntheticLot),
+      consumedLots.some((lot) => lot.incompleteNutrients)
     );
 
     const label = computeSkuLabel({
