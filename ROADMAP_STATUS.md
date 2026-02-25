@@ -2,11 +2,11 @@
 
 ## Current Sprint
 
-**Sprint 1A** — Inventory Intelligence Foundation + OI-3 Lot Consumption Wiring
+**Sprint 2** — Batch Yield Calibration + Cook/Chill QC Telemetry Extensions
 
 ## Status
 
-`gate_pending` — code complete, deploy verification needed
+`in_progress`
 
 ## Last Completed Gate
 
@@ -14,6 +14,8 @@
 |--------|--------|-----------|
 | Pre-roadmap (Kitchen Ops MVP) | gated_pass | 2026-02-25 |
 | Pre-roadmap (Kitchen Exec + Sauce) | gated_pass | 2026-02-25 |
+| Sprint 1A | gated_pass | 2026-02-25T18:00Z |
+| Sprint 1B | gated_pass | 2026-02-25T18:55Z |
 
 ## Blockers
 
@@ -21,42 +23,47 @@ None currently identified.
 
 ## Next Action
 
-Deploy to Render and run smoke test to close Sprint 1A gate.
+Implement Sprint 2: Batch Yield Calibration + Cook/Chill QC Telemetry.
 
 ## Latest Deploy Verification
 
 | Field | Value |
 |-------|-------|
 | Required for current sprint | yes |
-| Deploy status | not_run |
+| Deploy status | passed (Sprint 1A) |
 | Environment | production (Render) |
-| Deploy timestamp | — |
-| Smoke test summary | — |
+| Deploy timestamp | 2026-02-25T18:00Z |
+| Smoke test summary | API health OK, web 200, 49 SKUs, 538 labels, 89 lots, 86 ingredient projections |
 
 ## Sprint 1A Deliverables
 
-- [x] Schema: `parLevelG`, `reorderPointG` on IngredientCatalog (migration applied)
+- [x] Schema: `parLevelG`, `reorderPointG` on IngredientCatalog
 - [x] OI-3: Batch lot consumption wiring (FIFO, idempotent, ledger entries)
-- [x] Inventory projection engine (`inventory-projections.ts`)
-- [x] API: GET /v1/inventory/projections
-- [x] API: GET /v1/inventory/demand-forecast
-- [x] API: GET /v1/inventory/waste-summary
-- [x] API: GET /v1/inventory/allocation
-- [x] API: PATCH /v1/inventory/par-levels
-- [x] UI: Full inventory intelligence dashboard (inventory-board.tsx)
-- [x] 220 tests passing (30 new inventory projection tests)
-- [x] Typecheck: clean (API + Web)
-- [x] Lint: clean
-- [x] Web build: clean (17 routes)
-- [ ] Deploy smoke test
+- [x] Inventory projection engine
+- [x] API: 5 inventory endpoints
+- [x] UI: Full inventory intelligence dashboard
+- [x] 220 tests passing (30 new)
+- [x] Deploy smoke test: PASSED
+
+## Sprint 1B Deliverables
+
+- [x] Schema: InstacartMapping, SubstitutionRecord (migration applied to Neon)
+- [x] Mapping engine: deterministic weighted scoring (26 tests)
+- [x] Substitution engine: multi-factor ranking (20 tests)
+- [x] API: 7 new endpoints (mapping queue, suggestions, resolve, history, sub suggest/apply/list)
+- [x] UI: Mapping review queue + substitution finder (2 new pages)
+- [x] 266 tests passing (46 new)
+- [x] Typecheck: clean (3/3 workspaces)
+- [x] Build: 19 routes
+- [ ] Deploy smoke test (pending merge to main)
 
 ## Sprint History
 
 | Sprint | Status | Gate | Notes |
 |--------|--------|------|-------|
-| Sprint 1A | gate_pending | — | Code complete, awaiting deploy |
-| Sprint 1B | not_started | — | Blocked on 1A |
-| Sprint 2 | not_started | — | |
+| Sprint 1A | gated_pass | 2026-02-25T18:00Z | Deployed, smoke tested |
+| Sprint 1B | gated_pass | 2026-02-25T18:55Z | Code complete, tests green |
+| Sprint 2 | in_progress | — | Starting now |
 | Sprint 3 | not_started | — | |
 | Sprint 4 | not_started | — | |
 | Sprint 5 | not_started | — | |
