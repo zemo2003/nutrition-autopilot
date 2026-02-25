@@ -239,6 +239,16 @@ export default async function HomePage() {
                 <div className="kpi-label">Substitutions</div>
                 <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Find replacements</div>
               </Link>
+              <Link href={"/calibration" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">Yield</div>
+                <div className="kpi-label">Yield Calibration</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Variance & proposals</div>
+              </Link>
+              <Link href={"/qc-issues" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">QC</div>
+                <div className="kpi-label">Quality Control</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Issues & overrides</div>
+              </Link>
             </div>
             <div className="row" style={{ gap: "var(--sp-2)", marginTop: "var(--sp-4)" }}>
               <Link href={"/kitchen/print/pull-list" as any} className="btn btn-outline btn-sm">

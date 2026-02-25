@@ -7,7 +7,8 @@
   "exports": {
     ".": "./dist/index.js",
     "./mapping-score": "./dist/mapping-score.js",
-    "./substitution-engine": "./dist/substitution-engine.js"
+    "./substitution-engine": "./dist/substitution-engine.js",
+    "./yield-calibration": "./dist/yield-calibration.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

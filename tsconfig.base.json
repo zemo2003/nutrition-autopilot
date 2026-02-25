@@ -10,7 +10,8 @@
       "@nutrition/importers": ["packages/importers/src/index.ts"],
       "@nutrition/nutrition-engine": ["services/nutrition-engine/src/index.ts"],
       "@nutrition/nutrition-engine/mapping-score": ["services/nutrition-engine/src/mapping-score.ts"],
-      "@nutrition/nutrition-engine/substitution-engine": ["services/nutrition-engine/src/substitution-engine.ts"]
+      "@nutrition/nutrition-engine/substitution-engine": ["services/nutrition-engine/src/substitution-engine.ts"],
+      "@nutrition/nutrition-engine/yield-calibration": ["services/nutrition-engine/src/yield-calibration.ts"]
     },
     "strict": true,
     "resolveJsonModule": true,

@@ -189,6 +189,23 @@ enum SubstitutionStatus {
   EXPIRED
 }
 
+enum CalibrationStatus {
+  PENDING_REVIEW
+  ACCEPTED
+  REJECTED
+  SUPERSEDED
+}
+
+enum QcIssueType {
+  TEMP_MISS
+  CHILL_TIME_EXCEEDED
+  MISSING_CHECKPOINT
+  LATE_CHECKPOINT
+  MANUAL_OVERRIDE
+  YIELD_VARIANCE_HIGH
+  YIELD_VARIANCE_CRITICAL
+}
+
 model Organization {
   id        String   @id @default(cuid())
   name      String
@@ -216,6 +233,8 @@ model Organization {
   batchProductions    BatchProduction[]
   instacartMappings   InstacartMapping[]
   substitutionRecords SubstitutionRecord[]
+  yieldCalibrations   YieldCalibration[]
+  qcIssues            QcIssue[]
 }
 
 model User {
@@ -707,11 +726,12 @@ model Component {
   updatedAt          DateTime        @updatedAt
   version            Int             @default(1)
 
-  organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  lines         ComponentLine[]
-  batches       BatchProduction[]
-  sauceVariants SauceVariant[]
-  saucePairings SaucePairing[]    @relation("SaucePairings")
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lines             ComponentLine[]
+  batches           BatchProduction[]
+  sauceVariants     SauceVariant[]
+  saucePairings     SaucePairing[]     @relation("SaucePairings")
+  yieldCalibrations YieldCalibration[]
 
   @@unique([organizationId, name])
   @@index([organizationId, componentType])
@@ -767,6 +787,7 @@ model BatchProduction {
   lotConsumptions BatchLotConsumption[]
   outputLot       InventoryLot?         @relation("BatchOutput")
   checkpoints     BatchCheckpoint[]
+  qcIssues        QcIssue[]
 
   @@index([organizationId, status])
   @@index([organizationId, plannedDate])
@@ -922,4 +943,60 @@ model SubstitutionRecord {
 
   @@index([organizationId, status])
   @@index([organizationId, mealScheduleId])
+}
+
+// Sprint 2 — Yield Calibration
+model YieldCalibration {
+  id                String            @id @default(cuid())
+  organizationId    String
+  componentId       String
+  method            String?
+  cutForm           String?
+  expectedYieldPct  Float
+  actualYieldPct    Float
+  variancePct       Float
+  sampleCount       Int               @default(1)
+  confidenceScore   Float             @default(0)
+  proposedYieldPct  Float?
+  status            CalibrationStatus @default(PENDING_REVIEW)
+  isOutlier         Boolean           @default(false)
+  outlierReason     String?
+  reviewedBy        String?
+  reviewNotes       String?
+  batchProductionId String?
+  createdAt         DateTime          @default(now())
+  createdBy         String            @default("system")
+  updatedAt         DateTime          @updatedAt
+  version           Int               @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  component    Component    @relation(fields: [componentId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, componentId])
+  @@index([organizationId, status])
+}
+
+// Sprint 2 — QC Issues
+model QcIssue {
+  id                String      @id @default(cuid())
+  organizationId    String
+  batchProductionId String
+  issueType         QcIssueType
+  description       String
+  expectedValue     String?
+  actualValue       String?
+  overrideAllowed   Boolean     @default(true)
+  overrideReason    String?
+  overrideBy        String?
+  resolvedAt        DateTime?
+  createdAt         DateTime    @default(now())
+  createdBy         String      @default("system")
+  updatedAt         DateTime    @updatedAt
+  version           Int         @default(1)
+
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  batchProduction BatchProduction @relation(fields: [batchProductionId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, batchProductionId])
+  @@index([organizationId, issueType])
 }

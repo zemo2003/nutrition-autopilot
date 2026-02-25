@@ -27,6 +27,8 @@ const NAV_LINKS = [
   { href: "/sauces", label: "Sauces" },
   { href: "/mappings", label: "Mappings" },
   { href: "/substitutions", label: "Subs" },
+  { href: "/calibration", label: "Yield" },
+  { href: "/qc-issues", label: "QC" },
   { href: "/calendar", label: "Calendar" },
   { href: "/verification", label: "Verification" },
   { href: "/upload", label: "Import" },

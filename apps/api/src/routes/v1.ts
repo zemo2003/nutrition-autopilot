@@ -6,7 +6,7 @@ import { execFile as execFileCb } from "node:child_process";
 import express from "express";
 import multer from "multer";
 import { addHours, endOfMonth, parse, startOfMonth } from "date-fns";
-import { prisma, NutrientSourceType, VerificationStatus, VerificationTaskStatus, VerificationTaskSeverity, ScheduleStatus, BatchStatus, ComponentType, StorageLocation, SauceVariantType, BatchCheckpointType, MappingResolutionSource, SubstitutionStatus } from "@nutrition/db";
+import { prisma, NutrientSourceType, VerificationStatus, VerificationTaskStatus, VerificationTaskSeverity, ScheduleStatus, BatchStatus, ComponentType, StorageLocation, SauceVariantType, BatchCheckpointType, MappingResolutionSource, SubstitutionStatus, CalibrationStatus, QcIssueType } from "@nutrition/db";
 import { parseInstacartOrders, parsePilotMeals, parseSotWorkbook, mapOrderLineToIngredient } from "@nutrition/importers";
 import { getDefaultUser, getPrimaryOrganization } from "../lib/context.js";
 import { freezeLabelFromScheduleDone, buildLineageTree } from "../lib/label-freeze.js";
@@ -3467,4 +3467,339 @@ v1Router.get("/substitutions", async (req, res) => {
     take: 100,
   });
   return res.json({ substitutions: records, count: records.length });
+});
+
+// ── Sprint 2: Yield Calibration + QC ─────────────────
+
+/** GET /v1/yield-calibrations — list yield calibration records */
+v1Router.get("/yield-calibrations", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const componentId = req.query.componentId ? String(req.query.componentId) : undefined;
+  const status = req.query.status ? String(req.query.status) as CalibrationStatus : undefined;
+
+  const records = await prisma.yieldCalibration.findMany({
+    where: {
+      organizationId: org.id,
+      ...(componentId ? { componentId } : {}),
+      ...(status ? { status } : {}),
+    },
+    include: {
+      component: { select: { id: true, name: true, componentType: true } },
+    },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+  });
+
+  return res.json({ calibrations: records, count: records.length });
+});
+
+/** GET /v1/yield-calibrations/proposals — generate calibration proposals from batch history */
+v1Router.get("/yield-calibrations/proposals", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const componentId = req.query.componentId ? String(req.query.componentId) : undefined;
+
+  // Find components with completed batches that have yield data
+  const batches = await prisma.batchProduction.findMany({
+    where: {
+      organizationId: org.id,
+      status: "DONE" as BatchStatus,
+      actualYieldG: { not: null },
+      ...(componentId ? { componentId } : {}),
+    },
+    include: {
+      component: { select: { id: true, name: true, componentType: true } },
+    },
+    orderBy: { completedAt: "desc" },
+  });
+
+  // Group by component
+  const componentGroups = new Map<string, typeof batches>();
+  for (const batch of batches) {
+    const existing = componentGroups.get(batch.componentId) ?? [];
+    existing.push(batch);
+    componentGroups.set(batch.componentId, existing);
+  }
+
+  const { generateCalibrationProposal } = await import("@nutrition/nutrition-engine/yield-calibration");
+
+  const proposals = [];
+  for (const [compId, compBatches] of componentGroups.entries()) {
+    const first = compBatches[0];
+    if (!first) continue;
+    const comp = first.component;
+    const samples = compBatches.map((b) => {
+      const expectedYieldPct = b.rawInputG > 0 ? (b.expectedYieldG / b.rawInputG) * 100 : 0;
+      const actualYieldPct = b.rawInputG > 0 && b.actualYieldG ? (b.actualYieldG / b.rawInputG) * 100 : 0;
+      return {
+        batchId: b.id,
+        expectedYieldPct,
+        actualYieldPct,
+        variancePct: expectedYieldPct > 0 ? ((actualYieldPct - expectedYieldPct) / expectedYieldPct) * 100 : 0,
+        createdAt: b.createdAt.toISOString(),
+      };
+    });
+
+    // Use first batch's expected yield as default
+    const defaultYieldPct = samples[0]?.expectedYieldPct ?? 85;
+    const proposal = generateCalibrationProposal(compId, comp.name, defaultYieldPct, samples);
+    proposals.push(proposal);
+  }
+
+  return res.json({ proposals, count: proposals.length });
+});
+
+/** POST /v1/yield-calibrations — record a yield calibration entry */
+v1Router.post("/yield-calibrations", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const {
+    componentId,
+    method,
+    cutForm,
+    expectedYieldPct,
+    actualYieldPct,
+    batchProductionId,
+  } = req.body as {
+    componentId: string;
+    method?: string;
+    cutForm?: string;
+    expectedYieldPct: number;
+    actualYieldPct: number;
+    batchProductionId?: string;
+  };
+
+  if (!componentId || typeof expectedYieldPct !== "number" || typeof actualYieldPct !== "number") {
+    return res.status(400).json({ error: "componentId, expectedYieldPct, and actualYieldPct are required" });
+  }
+
+  const variancePct = expectedYieldPct > 0
+    ? ((actualYieldPct - expectedYieldPct) / expectedYieldPct) * 100
+    : 0;
+
+  const { classifyVariance } = await import("@nutrition/nutrition-engine/yield-calibration");
+  const severity = classifyVariance(variancePct);
+
+  const record = await prisma.yieldCalibration.create({
+    data: {
+      organizationId: org.id,
+      componentId,
+      method,
+      cutForm,
+      expectedYieldPct,
+      actualYieldPct,
+      variancePct,
+      batchProductionId,
+      status: "PENDING_REVIEW" as CalibrationStatus,
+    },
+  });
+
+  // Auto-create QC issue for high variance
+  if (batchProductionId && (severity === "warning" || severity === "critical")) {
+    await prisma.qcIssue.create({
+      data: {
+        organizationId: org.id,
+        batchProductionId,
+        issueType: (severity === "critical" ? "YIELD_VARIANCE_CRITICAL" : "YIELD_VARIANCE_HIGH") as QcIssueType,
+        description: `Yield variance ${variancePct.toFixed(1)}% (expected ${expectedYieldPct}%, actual ${actualYieldPct}%)`,
+        expectedValue: `${expectedYieldPct}%`,
+        actualValue: `${actualYieldPct}%`,
+      },
+    });
+  }
+
+  return res.json({ calibration: record, varianceSeverity: severity });
+});
+
+/** PATCH /v1/yield-calibrations/:id/review — accept or reject a calibration */
+v1Router.patch("/yield-calibrations/:id/review", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { id } = req.params;
+  const { status, reviewNotes } = req.body as {
+    status: "ACCEPTED" | "REJECTED";
+    reviewNotes?: string;
+  };
+
+  if (!status || !["ACCEPTED", "REJECTED"].includes(status)) {
+    return res.status(400).json({ error: "status must be ACCEPTED or REJECTED" });
+  }
+
+  const existing = await prisma.yieldCalibration.findUnique({ where: { id } });
+  if (!existing || existing.organizationId !== org.id) {
+    return res.status(404).json({ error: "calibration not found" });
+  }
+
+  const updated = await prisma.yieldCalibration.update({
+    where: { id },
+    data: {
+      status: status as CalibrationStatus,
+      reviewedBy: "system",
+      reviewNotes,
+      version: { increment: 1 },
+    },
+  });
+
+  return res.json({ calibration: updated });
+});
+
+/** GET /v1/yield-calibrations/variance-analytics — variance summary by component */
+v1Router.get("/yield-calibrations/variance-analytics", async (req, res) => {
+  const org = await getPrimaryOrganization();
+
+  const records = await prisma.yieldCalibration.findMany({
+    where: { organizationId: org.id },
+    include: {
+      component: { select: { id: true, name: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  const { classifyVariance, mean, stdDev } = await import("@nutrition/nutrition-engine/yield-calibration");
+
+  // Group by component
+  const byComponent = new Map<string, typeof records>();
+  for (const r of records) {
+    const existing = byComponent.get(r.componentId) ?? [];
+    existing.push(r);
+    byComponent.set(r.componentId, existing);
+  }
+
+  const analytics = Array.from(byComponent.entries()).map(([compId, recs]) => {
+    const actuals = recs.map((r) => r.actualYieldPct);
+    const variances = recs.map((r) => r.variancePct);
+    const severities = variances.map((v) => classifyVariance(v));
+
+    return {
+      componentId: compId,
+      componentName: recs[0]!.component.name,
+      sampleCount: recs.length,
+      meanActualYieldPct: Math.round(mean(actuals) * 100) / 100,
+      stdDevPct: Math.round(stdDev(actuals) * 100) / 100,
+      meanVariancePct: Math.round(mean(variances) * 100) / 100,
+      normalCount: severities.filter((s) => s === "normal").length,
+      warningCount: severities.filter((s) => s === "warning").length,
+      criticalCount: severities.filter((s) => s === "critical").length,
+    };
+  });
+
+  return res.json({ analytics, count: analytics.length });
+});
+
+/** GET /v1/qc-issues — list QC issues */
+v1Router.get("/qc-issues", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const batchId = req.query.batchId ? String(req.query.batchId) : undefined;
+  const issueType = req.query.issueType ? String(req.query.issueType) as QcIssueType : undefined;
+  const resolved = req.query.resolved;
+
+  const records = await prisma.qcIssue.findMany({
+    where: {
+      organizationId: org.id,
+      ...(batchId ? { batchProductionId: batchId } : {}),
+      ...(issueType ? { issueType } : {}),
+      ...(resolved === "true" ? { resolvedAt: { not: null } } : {}),
+      ...(resolved === "false" ? { resolvedAt: null } : {}),
+    },
+    include: {
+      batchProduction: { select: { id: true, batchCode: true, status: true } },
+    },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+  });
+
+  return res.json({ issues: records, count: records.length });
+});
+
+/** POST /v1/qc-issues — create a QC issue */
+v1Router.post("/qc-issues", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const {
+    batchProductionId,
+    issueType,
+    description,
+    expectedValue,
+    actualValue,
+  } = req.body as {
+    batchProductionId: string;
+    issueType: string;
+    description: string;
+    expectedValue?: string;
+    actualValue?: string;
+  };
+
+  if (!batchProductionId || !issueType || !description) {
+    return res.status(400).json({ error: "batchProductionId, issueType, and description required" });
+  }
+
+  const record = await prisma.qcIssue.create({
+    data: {
+      organizationId: org.id,
+      batchProductionId,
+      issueType: issueType as QcIssueType,
+      description,
+      expectedValue,
+      actualValue,
+    },
+  });
+
+  return res.json({ issue: record });
+});
+
+/** PATCH /v1/qc-issues/:id/override — override/resolve a QC issue */
+v1Router.patch("/qc-issues/:id/override", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { id } = req.params;
+  const { overrideReason } = req.body as { overrideReason: string };
+
+  if (!overrideReason) {
+    return res.status(400).json({ error: "overrideReason required" });
+  }
+
+  const existing = await prisma.qcIssue.findUnique({ where: { id } });
+  if (!existing || existing.organizationId !== org.id) {
+    return res.status(404).json({ error: "issue not found" });
+  }
+  if (!existing.overrideAllowed) {
+    return res.status(403).json({ error: "Override not allowed for this issue type" });
+  }
+
+  const updated = await prisma.qcIssue.update({
+    where: { id },
+    data: {
+      overrideReason,
+      overrideBy: "system",
+      resolvedAt: new Date(),
+      version: { increment: 1 },
+    },
+  });
+
+  return res.json({ issue: updated });
+});
+
+/** POST /v1/batches/:id/validate-checkpoint — validate checkpoint gate for status transition */
+v1Router.post("/batches/:id/validate-checkpoint", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { id } = req.params;
+  const { targetStatus } = req.body as { targetStatus: string };
+
+  if (!targetStatus) {
+    return res.status(400).json({ error: "targetStatus required" });
+  }
+
+  const batch = await prisma.batchProduction.findUnique({
+    where: { id },
+    include: { checkpoints: { select: { checkpointType: true } } },
+  });
+
+  if (!batch || batch.organizationId !== org.id) {
+    return res.status(404).json({ error: "batch not found" });
+  }
+
+  const { validateCheckpointGate } = await import("@nutrition/nutrition-engine/yield-calibration");
+  const existingTypes = batch.checkpoints.map((c) => c.checkpointType);
+  const result = validateCheckpointGate(targetStatus, existingTypes);
+
+  return res.json({
+    batchId: id,
+    targetStatus,
+    ...result,
+  });
 });
