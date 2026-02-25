@@ -25,6 +25,8 @@ const NAV_LINKS = [
   { href: "/batch-prep", label: "Batch Prep" },
   { href: "/kitchen", label: "Kitchen" },
   { href: "/sauces", label: "Sauces" },
+  { href: "/mappings", label: "Mappings" },
+  { href: "/substitutions", label: "Subs" },
   { href: "/calendar", label: "Calendar" },
   { href: "/verification", label: "Verification" },
   { href: "/upload", label: "Import" },

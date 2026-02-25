@@ -229,6 +229,16 @@ export default async function HomePage() {
                 <div className="kpi-label">Sauce Library</div>
                 <div className="kpi-note"><span className="badge badge-info">Browse</span></div>
               </Link>
+              <Link href={"/mappings" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">Map</div>
+                <div className="kpi-label">Import Mappings</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Resolve unmapped items</div>
+              </Link>
+              <Link href={"/substitutions" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">Sub</div>
+                <div className="kpi-label">Substitutions</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Find replacements</div>
+              </Link>
             </div>
             <div className="row" style={{ gap: "var(--sp-2)", marginTop: "var(--sp-4)" }}>
               <Link href={"/kitchen/print/pull-list" as any} className="btn btn-outline btn-sm">

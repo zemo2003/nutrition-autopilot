@@ -171,6 +171,24 @@ enum BatchCheckpointType {
   READY_CHECK
 }
 
+enum MappingResolutionSource {
+  AUTO_EXACT_UPC
+  AUTO_HIGH_CONFIDENCE
+  MANUAL_APPROVED_SUGGESTION
+  MANUAL_SEARCH_SELECT
+  MANUAL_CREATE_NEW
+  MANUAL_PANTRY_NON_TRACKED
+  HISTORICAL_LEARNED
+}
+
+enum SubstitutionStatus {
+  PROPOSED
+  APPROVED
+  APPLIED
+  REJECTED
+  EXPIRED
+}
+
 model Organization {
   id        String   @id @default(cuid())
   name      String
@@ -180,22 +198,24 @@ model Organization {
   updatedAt DateTime @updatedAt
   version   Int      @default(1)
 
-  users             User[]
-  roles             Role[]
-  clients           Client[]
-  skus              Sku[]
-  recipes           Recipe[]
-  ingredients       IngredientCatalog[]
-  products          ProductCatalog[]
-  inventoryLots     InventoryLot[]
-  mealSchedules     MealSchedule[]
-  mealServiceEvents MealServiceEvent[]
-  labelSnapshots    LabelSnapshot[]
-  verificationTasks VerificationTask[]
-  importJobs        ImportJob[]
-  instacartDrafts   InstacartDraft[]
-  components        Component[]
-  batchProductions  BatchProduction[]
+  users               User[]
+  roles               Role[]
+  clients             Client[]
+  skus                Sku[]
+  recipes             Recipe[]
+  ingredients         IngredientCatalog[]
+  products            ProductCatalog[]
+  inventoryLots       InventoryLot[]
+  mealSchedules       MealSchedule[]
+  mealServiceEvents   MealServiceEvent[]
+  labelSnapshots      LabelSnapshot[]
+  verificationTasks   VerificationTask[]
+  importJobs          ImportJob[]
+  instacartDrafts     InstacartDraft[]
+  components          Component[]
+  batchProductions    BatchProduction[]
+  instacartMappings   InstacartMapping[]
+  substitutionRecords SubstitutionRecord[]
 }
 
 model User {
@@ -334,10 +354,13 @@ model IngredientCatalog {
   updatedAt      DateTime @updatedAt
   version        Int      @default(1)
 
-  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  recipeLines    RecipeLine[]
-  products       ProductCatalog[]
-  componentLines ComponentLine[]
+  organization          Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  recipeLines           RecipeLine[]
+  products              ProductCatalog[]
+  componentLines        ComponentLine[]
+  instacartMappings     InstacartMapping[]
+  substitutionsOriginal SubstitutionRecord[] @relation("SubOriginal")
+  substitutionsSub      SubstitutionRecord[] @relation("SubSubstitute")
 
   @@unique([organizationId, canonicalKey])
 }
@@ -378,10 +401,11 @@ model ProductCatalog {
   updatedAt      DateTime @updatedAt
   version        Int      @default(1)
 
-  organization  Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  ingredient    IngredientCatalog      @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
-  nutrients     ProductNutrientValue[]
-  inventoryLots InventoryLot[]
+  organization      Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ingredient        IngredientCatalog      @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+  nutrients         ProductNutrientValue[]
+  inventoryLots     InventoryLot[]
+  instacartMappings InstacartMapping[]
 
   @@unique([organizationId, upc])
   @@index([organizationId, ingredientId])
@@ -838,4 +862,64 @@ model InstacartDraft {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, generatedAt])
+}
+
+// Sprint 1B — Instacart Mapping Memory
+model InstacartMapping {
+  id                String                  @id @default(cuid())
+  organizationId    String
+  sourceProductName String
+  sourceBrand       String?
+  sourceUpc         String?
+  ingredientId      String
+  productId         String?
+  resolutionSource  MappingResolutionSource
+  confidenceScore   Float                   @default(0)
+  scoreFactors      Json?
+  timesUsed         Int                     @default(1)
+  lastUsedAt        DateTime                @default(now())
+  active            Boolean                 @default(true)
+  createdAt         DateTime                @default(now())
+  createdBy         String                  @default("system")
+  updatedAt         DateTime                @updatedAt
+  version           Int                     @default(1)
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ingredient   IngredientCatalog @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+  product      ProductCatalog?   @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, sourceProductName, sourceBrand])
+  @@index([organizationId, sourceUpc])
+  @@index([organizationId, ingredientId])
+}
+
+// Sprint 1B — Substitution Engine
+model SubstitutionRecord {
+  id                     String             @id @default(cuid())
+  organizationId         String
+  mealScheduleId         String?
+  batchProductionId      String?
+  originalIngredientId   String
+  substituteIngredientId String
+  originalProductId      String?
+  substituteProductId    String?
+  reason                 String
+  status                 SubstitutionStatus @default(PROPOSED)
+  nutrientDelta          Json?
+  rankScore              Float?
+  rankFactors            Json?
+  appliedAt              DateTime?
+  reviewedBy             String?
+  reviewNotes            String?
+  createdAt              DateTime           @default(now())
+  createdBy              String             @default("system")
+  updatedAt              DateTime           @updatedAt
+  version                Int                @default(1)
+
+  organization         Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  originalIngredient   IngredientCatalog @relation("SubOriginal", fields: [originalIngredientId], references: [id], onDelete: Restrict)
+  substituteIngredient IngredientCatalog @relation("SubSubstitute", fields: [substituteIngredientId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([organizationId, mealScheduleId])
 }

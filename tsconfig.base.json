@@ -8,7 +8,9 @@
       "@nutrition/contracts": ["packages/contracts/src/index.ts"],
       "@nutrition/db": ["packages/db/src/index.ts"],
       "@nutrition/importers": ["packages/importers/src/index.ts"],
-      "@nutrition/nutrition-engine": ["services/nutrition-engine/src/index.ts"]
+      "@nutrition/nutrition-engine": ["services/nutrition-engine/src/index.ts"],
+      "@nutrition/nutrition-engine/mapping-score": ["services/nutrition-engine/src/mapping-score.ts"],
+      "@nutrition/nutrition-engine/substitution-engine": ["services/nutrition-engine/src/substitution-engine.ts"]
     },
     "strict": true,
     "resolveJsonModule": true,
