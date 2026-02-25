@@ -6,7 +6,7 @@ import { execFile as execFileCb } from "node:child_process";
 import express from "express";
 import multer from "multer";
 import { addHours, endOfMonth, parse, startOfMonth } from "date-fns";
-import { prisma, NutrientSourceType, VerificationStatus, VerificationTaskStatus, VerificationTaskSeverity, ScheduleStatus, BatchStatus, ComponentType, StorageLocation } from "@nutrition/db";
+import { prisma, NutrientSourceType, VerificationStatus, VerificationTaskStatus, VerificationTaskSeverity, ScheduleStatus, BatchStatus, ComponentType, StorageLocation, SauceVariantType, BatchCheckpointType } from "@nutrition/db";
 import { parseInstacartOrders, parsePilotMeals, parseSotWorkbook, mapOrderLineToIngredient } from "@nutrition/importers";
 import { getDefaultUser, getPrimaryOrganization } from "../lib/context.js";
 import { freezeLabelFromScheduleDone, buildLineageTree } from "../lib/label-freeze.js";
@@ -1969,11 +1969,21 @@ v1Router.post("/inventory/adjust", async (req, res) => {
 
 // ── Kitchen Ops: Components ────────────────────────────────────
 
-v1Router.get("/components", async (_req, res) => {
+v1Router.get("/components", async (req, res) => {
   const org = await getPrimaryOrganization();
+  const typeRaw = typeof req.query.type === "string" ? req.query.type : undefined;
+  const typeFilter = typeRaw
+    ? typeRaw.split(",")
+        .map((t) => t.trim().toUpperCase())
+        .filter((t): t is ComponentType => Object.values(ComponentType).includes(t as ComponentType))
+    : undefined;
 
   const components = await prisma.component.findMany({
-    where: { organizationId: org.id, active: true },
+    where: {
+      organizationId: org.id,
+      active: true,
+      ...(typeFilter?.length ? { componentType: { in: typeFilter } } : {}),
+    },
     include: { _count: { select: { lines: true } } },
     orderBy: [{ componentType: "asc" }, { name: "asc" }],
   });
@@ -2281,4 +2291,542 @@ v1Router.post("/clients/:clientId/file-records", async (req, res) => {
   });
 
   return res.json(newRecord);
+});
+
+// ── Kitchen Ops: Sauce Management ──────────────────────────────
+
+v1Router.get("/sauces", async (_req, res) => {
+  const org = await getPrimaryOrganization();
+
+  const components = await prisma.component.findMany({
+    where: {
+      organizationId: org.id,
+      componentType: { in: [ComponentType.SAUCE, ComponentType.CONDIMENT] },
+    },
+    include: {
+      _count: { select: { lines: true } },
+      sauceVariants: true,
+      saucePairings: true,
+    },
+    orderBy: [{ componentType: "asc" }, { name: "asc" }],
+  });
+
+  return res.json(
+    components.map((c) => ({
+      id: c.id,
+      name: c.name,
+      componentType: c.componentType,
+      description: c.description,
+      defaultYieldFactor: c.defaultYieldFactor,
+      allergenTags: c.allergenTags,
+      flavorProfiles: c.flavorProfiles,
+      portionIncrementG: c.portionIncrementG,
+      macroVariant: c.macroVariant,
+      active: c.active,
+      lineCount: c._count.lines,
+      variants: c.sauceVariants,
+      pairings: c.saucePairings,
+    }))
+  );
+});
+
+v1Router.post("/sauces/:componentId/variants", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const user = await getDefaultUser();
+  const { componentId } = req.params;
+  const { variantType, kcalPer100g, proteinPer100g, carbPer100g, fatPer100g, fiberPer100g, sodiumPer100g } = req.body as {
+    variantType?: string;
+    kcalPer100g?: number;
+    proteinPer100g?: number;
+    carbPer100g?: number;
+    fatPer100g?: number;
+    fiberPer100g?: number;
+    sodiumPer100g?: number;
+  };
+
+  if (!variantType || !Object.values(SauceVariantType).includes(variantType as SauceVariantType)) {
+    return res.status(400).json({ error: "variantType is required and must be a valid SauceVariantType" });
+  }
+
+  const component = await prisma.component.findFirst({
+    where: { id: componentId, organizationId: org.id },
+  });
+  if (!component) {
+    return res.status(404).json({ error: "Component not found" });
+  }
+  if (component.componentType !== ComponentType.SAUCE && component.componentType !== ComponentType.CONDIMENT) {
+    return res.status(400).json({ error: "Component must be SAUCE or CONDIMENT type" });
+  }
+
+  const variant = await prisma.sauceVariant.upsert({
+    where: {
+      componentId_variantType: {
+        componentId,
+        variantType: variantType as SauceVariantType,
+      },
+    },
+    update: {
+      ...(typeof kcalPer100g === "number" ? { kcalPer100g } : {}),
+      ...(typeof proteinPer100g === "number" ? { proteinPer100g } : {}),
+      ...(typeof carbPer100g === "number" ? { carbPer100g } : {}),
+      ...(typeof fatPer100g === "number" ? { fatPer100g } : {}),
+      ...(typeof fiberPer100g === "number" ? { fiberPer100g } : {}),
+      ...(typeof sodiumPer100g === "number" ? { sodiumPer100g } : {}),
+      version: { increment: 1 },
+    },
+    create: {
+      componentId,
+      variantType: variantType as SauceVariantType,
+      kcalPer100g: kcalPer100g ?? null,
+      proteinPer100g: proteinPer100g ?? null,
+      carbPer100g: carbPer100g ?? null,
+      fatPer100g: fatPer100g ?? null,
+      fiberPer100g: fiberPer100g ?? null,
+      sodiumPer100g: sodiumPer100g ?? null,
+      createdBy: user.email,
+    },
+  });
+
+  return res.json(variant);
+});
+
+v1Router.post("/sauces/:componentId/pairings", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const user = await getDefaultUser();
+  const { componentId } = req.params;
+  const { pairedComponentType, recommended, defaultPortionG, notes } = req.body as {
+    pairedComponentType?: string;
+    recommended?: boolean;
+    defaultPortionG?: number;
+    notes?: string;
+  };
+
+  if (!pairedComponentType || !Object.values(ComponentType).includes(pairedComponentType as ComponentType)) {
+    return res.status(400).json({ error: "pairedComponentType is required and must be a valid ComponentType" });
+  }
+
+  const component = await prisma.component.findFirst({
+    where: { id: componentId, organizationId: org.id },
+  });
+  if (!component) {
+    return res.status(404).json({ error: "Component not found" });
+  }
+  if (component.componentType !== ComponentType.SAUCE && component.componentType !== ComponentType.CONDIMENT) {
+    return res.status(400).json({ error: "Component must be SAUCE or CONDIMENT type" });
+  }
+
+  const pairing = await prisma.saucePairing.upsert({
+    where: {
+      sauceComponentId_pairedComponentType: {
+        sauceComponentId: componentId,
+        pairedComponentType: pairedComponentType as ComponentType,
+      },
+    },
+    update: {
+      ...(typeof recommended === "boolean" ? { recommended } : {}),
+      ...(typeof defaultPortionG === "number" ? { defaultPortionG } : {}),
+      ...(notes !== undefined ? { notes } : {}),
+      version: { increment: 1 },
+    },
+    create: {
+      sauceComponentId: componentId,
+      pairedComponentType: pairedComponentType as ComponentType,
+      recommended: recommended ?? false,
+      defaultPortionG: defaultPortionG ?? null,
+      notes: notes ?? null,
+      createdBy: user.email,
+    },
+  });
+
+  return res.json(pairing);
+});
+
+v1Router.delete("/sauces/:componentId/pairings/:pairingId", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { componentId, pairingId } = req.params;
+
+  const component = await prisma.component.findFirst({
+    where: { id: componentId, organizationId: org.id },
+  });
+  if (!component) {
+    return res.status(404).json({ error: "Component not found" });
+  }
+
+  const pairing = await prisma.saucePairing.findFirst({
+    where: { id: pairingId, sauceComponentId: componentId },
+  });
+  if (!pairing) {
+    return res.status(404).json({ error: "Pairing not found" });
+  }
+
+  await prisma.saucePairing.delete({ where: { id: pairingId } });
+
+  return res.json({ deleted: true, id: pairingId });
+});
+
+// ── Kitchen Ops: Batch Checkpoints ─────────────────────────────
+
+v1Router.post("/batches/:batchId/checkpoints", async (req, res) => {
+  const user = await getDefaultUser();
+  const { batchId } = req.params;
+  const { checkpointType, tempC, notes, timerDurationM } = req.body as {
+    checkpointType?: string;
+    tempC?: number;
+    notes?: string;
+    timerDurationM?: number;
+  };
+
+  if (!checkpointType || !Object.values(BatchCheckpointType).includes(checkpointType as BatchCheckpointType)) {
+    return res.status(400).json({ error: "checkpointType is required and must be a valid BatchCheckpointType" });
+  }
+
+  const batch = await prisma.batchProduction.findUnique({ where: { id: batchId } });
+  if (!batch) {
+    return res.status(404).json({ error: "Batch not found" });
+  }
+
+  const checkpoint = await prisma.batchCheckpoint.create({
+    data: {
+      batchId,
+      checkpointType: checkpointType as BatchCheckpointType,
+      tempC: tempC ?? null,
+      notes: notes ?? null,
+      timerDurationM: timerDurationM ?? null,
+      timerStartedAt: timerDurationM ? new Date() : null,
+      createdBy: user.email,
+    },
+  });
+
+  return res.json(checkpoint);
+});
+
+v1Router.get("/batches/:batchId/checkpoints", async (req, res) => {
+  const { batchId } = req.params;
+
+  const batch = await prisma.batchProduction.findUnique({ where: { id: batchId } });
+  if (!batch) {
+    return res.status(404).json({ error: "Batch not found" });
+  }
+
+  const checkpoints = await prisma.batchCheckpoint.findMany({
+    where: { batchId },
+    orderBy: { occurredAt: "asc" },
+  });
+
+  return res.json(checkpoints);
+});
+
+// ── Kitchen Ops: Batch Detail ──────────────────────────────────
+
+v1Router.get("/batches/:batchId", async (req, res) => {
+  const { batchId } = req.params;
+
+  const batch = await prisma.batchProduction.findUnique({
+    where: { id: batchId },
+    include: {
+      component: {
+        include: {
+          lines: {
+            include: { ingredient: true },
+            orderBy: { lineOrder: "asc" },
+          },
+        },
+      },
+      checkpoints: {
+        orderBy: { occurredAt: "asc" },
+      },
+      lotConsumptions: {
+        include: {
+          inventoryLot: {
+            include: { product: true },
+          },
+        },
+      },
+    },
+  });
+
+  if (!batch) {
+    return res.status(404).json({ error: "Batch not found" });
+  }
+
+  return res.json({
+    id: batch.id,
+    componentId: batch.componentId,
+    status: batch.status,
+    plannedDate: batch.plannedDate.toISOString().slice(0, 10),
+    batchCode: batch.batchCode,
+    rawInputG: batch.rawInputG,
+    expectedYieldG: batch.expectedYieldG,
+    actualYieldG: batch.actualYieldG,
+    yieldVariance: batch.yieldVariance,
+    portionCount: batch.portionCount,
+    portionSizeG: batch.portionSizeG,
+    cookTempC: batch.cookTempC,
+    cookTimeMin: batch.cookTimeMin,
+    chillStartedAt: batch.chillStartedAt,
+    chillCompletedAt: batch.chillCompletedAt,
+    notes: batch.notes,
+    completedAt: batch.completedAt,
+    component: {
+      id: batch.component.id,
+      name: batch.component.name,
+      componentType: batch.component.componentType,
+      defaultYieldFactor: batch.component.defaultYieldFactor,
+      lines: batch.component.lines.map((l) => ({
+        id: l.id,
+        ingredientId: l.ingredientId,
+        ingredientName: l.ingredient.name,
+        lineOrder: l.lineOrder,
+        targetGPer100g: l.targetGPer100g,
+        preparation: l.preparation,
+        preparedState: l.preparedState,
+        yieldFactor: l.yieldFactor,
+        required: l.required,
+      })),
+    },
+    checkpoints: batch.checkpoints,
+    lotConsumptions: batch.lotConsumptions.map((lc) => ({
+      id: lc.id,
+      inventoryLotId: lc.inventoryLotId,
+      gramsConsumed: lc.gramsConsumed,
+      productName: lc.inventoryLot.product.name,
+    })),
+  });
+});
+
+// ── Kitchen Ops: Print Data ────────────────────────────────────
+
+v1Router.get("/print/batch-sheet/:batchId", async (req, res) => {
+  const { batchId } = req.params;
+
+  const batch = await prisma.batchProduction.findUnique({
+    where: { id: batchId },
+    include: {
+      component: {
+        include: {
+          lines: {
+            include: { ingredient: true },
+            orderBy: { lineOrder: "asc" },
+          },
+        },
+      },
+      checkpoints: {
+        orderBy: { occurredAt: "asc" },
+      },
+    },
+  });
+
+  if (!batch) {
+    return res.status(404).json({ error: "Batch not found" });
+  }
+
+  // Generate expected steps based on component type
+  const expectedSteps: string[] = [];
+  const ct = batch.component.componentType;
+  expectedSteps.push("Weigh raw ingredients");
+  if (ct === ComponentType.PROTEIN) {
+    expectedSteps.push("Season and prepare protein");
+    expectedSteps.push("Cook to target temperature");
+    expectedSteps.push("Rest and check internal temp");
+    expectedSteps.push("Chill to safe temperature");
+    expectedSteps.push("Portion into containers");
+  } else if (ct === ComponentType.SAUCE || ct === ComponentType.CONDIMENT) {
+    expectedSteps.push("Combine base ingredients");
+    expectedSteps.push("Cook/reduce to target consistency");
+    expectedSteps.push("Season and adjust");
+    expectedSteps.push("Cool and portion");
+  } else if (ct === ComponentType.VEGETABLE) {
+    expectedSteps.push("Wash and prep vegetables");
+    expectedSteps.push("Cook to desired doneness");
+    expectedSteps.push("Season and cool");
+    expectedSteps.push("Portion into containers");
+  } else if (ct === ComponentType.CARB_BASE) {
+    expectedSteps.push("Prepare carb base (rinse if needed)");
+    expectedSteps.push("Cook to target texture");
+    expectedSteps.push("Cool and portion");
+  } else {
+    expectedSteps.push("Prepare ingredients");
+    expectedSteps.push("Cook or assemble");
+    expectedSteps.push("Cool and portion");
+  }
+  expectedSteps.push("Label and store");
+
+  return res.json({
+    batch: {
+      id: batch.id,
+      status: batch.status,
+      plannedDate: batch.plannedDate.toISOString().slice(0, 10),
+      batchCode: batch.batchCode,
+      rawInputG: batch.rawInputG,
+      expectedYieldG: batch.expectedYieldG,
+      portionCount: batch.portionCount,
+      portionSizeG: batch.portionSizeG,
+      cookTempC: batch.cookTempC,
+      cookTimeMin: batch.cookTimeMin,
+      notes: batch.notes,
+    },
+    component: {
+      name: batch.component.name,
+      type: batch.component.componentType,
+      lines: batch.component.lines.map((l) => ({
+        ingredientName: l.ingredient.name,
+        targetGPer100g: l.targetGPer100g,
+        preparation: l.preparation,
+        preparedState: l.preparedState,
+      })),
+    },
+    checkpoints: batch.checkpoints,
+    expectedSteps,
+  });
+});
+
+v1Router.get("/print/pull-list", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const hoursAheadRaw = Number(req.query.hoursAhead);
+  const hoursAhead = Number.isFinite(hoursAheadRaw) && hoursAheadRaw > 0 ? hoursAheadRaw : 24;
+
+  const now = new Date();
+  const horizon = addHours(now, hoursAhead);
+
+  const batches = await prisma.batchProduction.findMany({
+    where: {
+      organizationId: org.id,
+      status: BatchStatus.PLANNED,
+      plannedDate: { gte: now, lte: horizon },
+    },
+    include: {
+      component: {
+        include: {
+          lines: {
+            include: {
+              ingredient: {
+                include: {
+                  products: {
+                    include: {
+                      inventoryLots: {
+                        where: { quantityAvailableG: { gt: 0 } },
+                        orderBy: { expiresAt: "asc" },
+                        take: 3,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  // Group by component, aggregate ingredient quantities
+  const componentMap = new Map<string, {
+    componentName: string;
+    componentType: string;
+    ingredients: Map<string, {
+      name: string;
+      totalNeededG: number;
+      storageLocation: string | null;
+      suggestedLots: Array<{ lotId: string; availableG: number; expiresAt: string | null }>;
+    }>;
+  }>();
+
+  for (const batch of batches) {
+    const key = batch.componentId;
+    if (!componentMap.has(key)) {
+      componentMap.set(key, {
+        componentName: batch.component.name,
+        componentType: batch.component.componentType,
+        ingredients: new Map(),
+      });
+    }
+    const entry = componentMap.get(key)!;
+
+    for (const line of batch.component.lines) {
+      const ingredientNeededG = (line.targetGPer100g / 100) * batch.rawInputG;
+      const ingKey = line.ingredientId;
+
+      if (!entry.ingredients.has(ingKey)) {
+        // Find best storage location from available lots
+        const allLots = line.ingredient.products.flatMap((p) => p.inventoryLots);
+        const topLot = allLots[0];
+
+        entry.ingredients.set(ingKey, {
+          name: line.ingredient.name,
+          totalNeededG: 0,
+          storageLocation: topLot?.storageLocation ?? null,
+          suggestedLots: allLots.slice(0, 3).map((lot) => ({
+            lotId: lot.id,
+            availableG: lot.quantityAvailableG,
+            expiresAt: lot.expiresAt?.toISOString() ?? null,
+          })),
+        });
+      }
+      const ingEntry = entry.ingredients.get(ingKey)!;
+      ingEntry.totalNeededG += ingredientNeededG;
+    }
+  }
+
+  const result = [...componentMap.values()].map((c) => ({
+    componentName: c.componentName,
+    componentType: c.componentType,
+    ingredients: [...c.ingredients.values()].map((ing) => ({
+      name: ing.name,
+      totalNeededG: Math.round(ing.totalNeededG * 10) / 10,
+      storageLocation: ing.storageLocation,
+      suggestedLots: ing.suggestedLots,
+    })),
+  }));
+
+  return res.json(result);
+});
+
+v1Router.get("/print/daily-summary", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const dateRaw = typeof req.query.date === "string" ? req.query.date : new Date().toISOString().slice(0, 10);
+  const targetDate = parseDateOnlyUtc(dateRaw);
+  const startOfDay = new Date(Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate(), 0, 0, 0));
+  const endOfDay = new Date(Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate(), 23, 59, 59, 999));
+
+  const batches = await prisma.batchProduction.findMany({
+    where: {
+      organizationId: org.id,
+      plannedDate: { gte: startOfDay, lte: endOfDay },
+    },
+    include: { component: true },
+    orderBy: [{ component: { componentType: "asc" } }, { plannedDate: "asc" }],
+  });
+
+  // Group by componentType
+  const groupMap = new Map<string, Array<{
+    name: string;
+    status: string;
+    plannedDate: string;
+    rawInputG: number;
+    expectedYieldG: number;
+    actualYieldG: number | null;
+  }>>();
+
+  for (const batch of batches) {
+    const ct = batch.component.componentType;
+    if (!groupMap.has(ct)) {
+      groupMap.set(ct, []);
+    }
+    groupMap.get(ct)!.push({
+      name: batch.component.name,
+      status: batch.status,
+      plannedDate: batch.plannedDate.toISOString().slice(0, 10),
+      rawInputG: batch.rawInputG,
+      expectedYieldG: batch.expectedYieldG,
+      actualYieldG: batch.actualYieldG,
+    });
+  }
+
+  return res.json({
+    date: dateRaw,
+    groups: [...groupMap.entries()].map(([componentType, batchList]) => ({
+      componentType,
+      batches: batchList,
+    })),
+  });
 });
