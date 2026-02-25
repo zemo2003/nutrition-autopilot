@@ -146,6 +146,29 @@ enum FlavorProfile {
   NEUTRAL
   HERBAL
   SMOKY
+  CITRUS
+  MEDITERRANEAN
+  JAPANESE
+  KOREAN
+}
+
+enum SauceVariantType {
+  STANDARD
+  LOW_FAT
+  HIGH_FAT
+}
+
+enum BatchCheckpointType {
+  PREP_START
+  COOK_START
+  TEMP_CHECK
+  COOK_END
+  CHILL_START
+  CHILL_TEMP_CHECK
+  CHILL_END
+  PORTION_START
+  PORTION_END
+  READY_CHECK
 }
 
 model Organization {
@@ -658,9 +681,11 @@ model Component {
   updatedAt          DateTime        @updatedAt
   version            Int             @default(1)
 
-  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  lines        ComponentLine[]
-  batches      BatchProduction[]
+  organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lines         ComponentLine[]
+  batches       BatchProduction[]
+  sauceVariants SauceVariant[]
+  saucePairings SaucePairing[]    @relation("SaucePairings")
 
   @@unique([organizationId, name])
   @@index([organizationId, componentType])
@@ -715,6 +740,7 @@ model BatchProduction {
   component       Component             @relation(fields: [componentId], references: [id])
   lotConsumptions BatchLotConsumption[]
   outputLot       InventoryLot?         @relation("BatchOutput")
+  checkpoints     BatchCheckpoint[]
 
   @@index([organizationId, status])
   @@index([organizationId, plannedDate])
@@ -733,6 +759,65 @@ model BatchLotConsumption {
   inventoryLot InventoryLot    @relation(fields: [inventoryLotId], references: [id])
 
   @@index([batchId])
+}
+
+model SauceVariant {
+  id             String           @id @default(cuid())
+  componentId    String
+  variantType    SauceVariantType @default(STANDARD)
+  kcalPer100g    Float?
+  proteinPer100g Float?
+  carbPer100g    Float?
+  fatPer100g     Float?
+  fiberPer100g   Float?
+  sodiumPer100g  Float?
+  active         Boolean          @default(true)
+  createdAt      DateTime         @default(now())
+  createdBy      String           @default("system")
+  updatedAt      DateTime         @updatedAt
+  version        Int              @default(1)
+
+  component Component @relation(fields: [componentId], references: [id], onDelete: Cascade)
+
+  @@unique([componentId, variantType])
+  @@index([componentId])
+}
+
+model SaucePairing {
+  id                  String        @id @default(cuid())
+  sauceComponentId    String
+  pairedComponentType ComponentType
+  recommended         Boolean       @default(false)
+  defaultPortionG     Float?
+  notes               String?
+  createdAt           DateTime      @default(now())
+  createdBy           String        @default("system")
+  updatedAt           DateTime      @updatedAt
+  version             Int           @default(1)
+
+  sauceComponent Component @relation("SaucePairings", fields: [sauceComponentId], references: [id], onDelete: Cascade)
+
+  @@unique([sauceComponentId, pairedComponentType])
+  @@index([sauceComponentId])
+}
+
+model BatchCheckpoint {
+  id             String              @id @default(cuid())
+  batchId        String
+  checkpointType BatchCheckpointType
+  occurredAt     DateTime            @default(now())
+  tempC          Float?
+  notes          String?
+  timerDurationM Int?
+  timerStartedAt DateTime?
+  createdBy      String              @default("system")
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  version        Int                 @default(1)
+
+  batch BatchProduction @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([batchId, occurredAt])
 }
 
 model InstacartDraft {
