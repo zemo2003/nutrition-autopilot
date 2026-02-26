@@ -171,6 +171,41 @@ enum BatchCheckpointType {
   READY_CHECK
 }
 
+enum MappingResolutionSource {
+  AUTO_EXACT_UPC
+  AUTO_HIGH_CONFIDENCE
+  MANUAL_APPROVED_SUGGESTION
+  MANUAL_SEARCH_SELECT
+  MANUAL_CREATE_NEW
+  MANUAL_PANTRY_NON_TRACKED
+  HISTORICAL_LEARNED
+}
+
+enum SubstitutionStatus {
+  PROPOSED
+  APPROVED
+  APPLIED
+  REJECTED
+  EXPIRED
+}
+
+enum CalibrationStatus {
+  PENDING_REVIEW
+  ACCEPTED
+  REJECTED
+  SUPERSEDED
+}
+
+enum QcIssueType {
+  TEMP_MISS
+  CHILL_TIME_EXCEEDED
+  MISSING_CHECKPOINT
+  LATE_CHECKPOINT
+  MANUAL_OVERRIDE
+  YIELD_VARIANCE_HIGH
+  YIELD_VARIANCE_CRITICAL
+}
+
 model Organization {
   id        String   @id @default(cuid())
   name      String
@@ -180,22 +215,32 @@ model Organization {
   updatedAt DateTime @updatedAt
   version   Int      @default(1)
 
-  users             User[]
-  roles             Role[]
-  clients           Client[]
-  skus              Sku[]
-  recipes           Recipe[]
-  ingredients       IngredientCatalog[]
-  products          ProductCatalog[]
-  inventoryLots     InventoryLot[]
-  mealSchedules     MealSchedule[]
-  mealServiceEvents MealServiceEvent[]
-  labelSnapshots    LabelSnapshot[]
-  verificationTasks VerificationTask[]
-  importJobs        ImportJob[]
-  instacartDrafts   InstacartDraft[]
-  components        Component[]
-  batchProductions  BatchProduction[]
+  users               User[]
+  roles               Role[]
+  clients             Client[]
+  skus                Sku[]
+  recipes             Recipe[]
+  ingredients         IngredientCatalog[]
+  products            ProductCatalog[]
+  inventoryLots       InventoryLot[]
+  mealSchedules       MealSchedule[]
+  mealServiceEvents   MealServiceEvent[]
+  labelSnapshots      LabelSnapshot[]
+  verificationTasks   VerificationTask[]
+  importJobs          ImportJob[]
+  instacartDrafts     InstacartDraft[]
+  components          Component[]
+  batchProductions    BatchProduction[]
+  instacartMappings   InstacartMapping[]
+  substitutionRecords SubstitutionRecord[]
+  yieldCalibrations   YieldCalibration[]
+  qcIssues              QcIssue[]
+  compositionTemplates  CompositionTemplate[]
+  prepDrafts            PrepDraft[]
+  fileAttachments       FileAttachment[]
+  biometricSnapshots    BiometricSnapshot[]
+  clientDocuments       ClientDocument[]
+  metricSeries          MetricSeries[]
 }
 
 model User {
@@ -270,9 +315,12 @@ model Client {
   updatedAt                DateTime @updatedAt
   version                  Int      @default(1)
 
-  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  mealSchedules     MealSchedule[]
-  mealServiceEvents MealServiceEvent[]
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  mealSchedules      MealSchedule[]
+  mealServiceEvents  MealServiceEvent[]
+  biometricSnapshots BiometricSnapshot[]
+  clientDocuments    ClientDocument[]
+  metricSeries       MetricSeries[]
 
   @@unique([organizationId, externalRef])
   @@index([organizationId])
@@ -334,10 +382,13 @@ model IngredientCatalog {
   updatedAt      DateTime @updatedAt
   version        Int      @default(1)
 
-  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  recipeLines    RecipeLine[]
-  products       ProductCatalog[]
-  componentLines ComponentLine[]
+  organization          Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  recipeLines           RecipeLine[]
+  products              ProductCatalog[]
+  componentLines        ComponentLine[]
+  instacartMappings     InstacartMapping[]
+  substitutionsOriginal SubstitutionRecord[] @relation("SubOriginal")
+  substitutionsSub      SubstitutionRecord[] @relation("SubSubstitute")
 
   @@unique([organizationId, canonicalKey])
 }
@@ -378,10 +429,11 @@ model ProductCatalog {
   updatedAt      DateTime @updatedAt
   version        Int      @default(1)
 
-  organization  Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  ingredient    IngredientCatalog      @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
-  nutrients     ProductNutrientValue[]
-  inventoryLots InventoryLot[]
+  organization      Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ingredient        IngredientCatalog      @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+  nutrients         ProductNutrientValue[]
+  inventoryLots     InventoryLot[]
+  instacartMappings InstacartMapping[]
 
   @@unique([organizationId, upc])
   @@index([organizationId, ingredientId])
@@ -476,7 +528,9 @@ model MealSchedule {
   id              String         @id @default(cuid())
   organizationId  String
   clientId        String
-  skuId           String
+  skuId           String?
+  compositionId   String?
+  mealSource      MealSource     @default(RECIPE)
   serviceDate     DateTime
   mealSlot        String
   status          ScheduleStatus @default(PLANNED)
@@ -487,9 +541,10 @@ model MealSchedule {
   updatedAt       DateTime       @updatedAt
   version         Int            @default(1)
 
-  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  client       Client            @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  sku          Sku               @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client                @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  sku          Sku?                  @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  composition  CompositionTemplate?  @relation(fields: [compositionId], references: [id], onDelete: Restrict)
   serviceEvent MealServiceEvent?
 
   @@index([organizationId, clientId, serviceDate])
@@ -683,11 +738,13 @@ model Component {
   updatedAt          DateTime        @updatedAt
   version            Int             @default(1)
 
-  organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  lines         ComponentLine[]
-  batches       BatchProduction[]
-  sauceVariants SauceVariant[]
-  saucePairings SaucePairing[]    @relation("SaucePairings")
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lines             ComponentLine[]
+  batches           BatchProduction[]
+  sauceVariants     SauceVariant[]
+  saucePairings     SaucePairing[]     @relation("SaucePairings")
+  yieldCalibrations  YieldCalibration[]
+  compositionSlots   CompositionSlot[]
 
   @@unique([organizationId, name])
   @@index([organizationId, componentType])
@@ -743,6 +800,7 @@ model BatchProduction {
   lotConsumptions BatchLotConsumption[]
   outputLot       InventoryLot?         @relation("BatchOutput")
   checkpoints     BatchCheckpoint[]
+  qcIssues        QcIssue[]
 
   @@index([organizationId, status])
   @@index([organizationId, plannedDate])
@@ -838,4 +896,331 @@ model InstacartDraft {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, generatedAt])
+}
+
+// Sprint 1B — Instacart Mapping Memory
+model InstacartMapping {
+  id                String                  @id @default(cuid())
+  organizationId    String
+  sourceProductName String
+  sourceBrand       String?
+  sourceUpc         String?
+  ingredientId      String
+  productId         String?
+  resolutionSource  MappingResolutionSource
+  confidenceScore   Float                   @default(0)
+  scoreFactors      Json?
+  timesUsed         Int                     @default(1)
+  lastUsedAt        DateTime                @default(now())
+  active            Boolean                 @default(true)
+  createdAt         DateTime                @default(now())
+  createdBy         String                  @default("system")
+  updatedAt         DateTime                @updatedAt
+  version           Int                     @default(1)
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ingredient   IngredientCatalog @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+  product      ProductCatalog?   @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, sourceProductName, sourceBrand])
+  @@index([organizationId, sourceUpc])
+  @@index([organizationId, ingredientId])
+}
+
+// Sprint 1B — Substitution Engine
+model SubstitutionRecord {
+  id                     String             @id @default(cuid())
+  organizationId         String
+  mealScheduleId         String?
+  batchProductionId      String?
+  originalIngredientId   String
+  substituteIngredientId String
+  originalProductId      String?
+  substituteProductId    String?
+  reason                 String
+  status                 SubstitutionStatus @default(PROPOSED)
+  nutrientDelta          Json?
+  rankScore              Float?
+  rankFactors            Json?
+  appliedAt              DateTime?
+  reviewedBy             String?
+  reviewNotes            String?
+  createdAt              DateTime           @default(now())
+  createdBy              String             @default("system")
+  updatedAt              DateTime           @updatedAt
+  version                Int                @default(1)
+
+  organization         Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  originalIngredient   IngredientCatalog @relation("SubOriginal", fields: [originalIngredientId], references: [id], onDelete: Restrict)
+  substituteIngredient IngredientCatalog @relation("SubSubstitute", fields: [substituteIngredientId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([organizationId, mealScheduleId])
+}
+
+// Sprint 2 — Yield Calibration
+model YieldCalibration {
+  id                String            @id @default(cuid())
+  organizationId    String
+  componentId       String
+  method            String?
+  cutForm           String?
+  expectedYieldPct  Float
+  actualYieldPct    Float
+  variancePct       Float
+  sampleCount       Int               @default(1)
+  confidenceScore   Float             @default(0)
+  proposedYieldPct  Float?
+  status            CalibrationStatus @default(PENDING_REVIEW)
+  isOutlier         Boolean           @default(false)
+  outlierReason     String?
+  reviewedBy        String?
+  reviewNotes       String?
+  batchProductionId String?
+  createdAt         DateTime          @default(now())
+  createdBy         String            @default("system")
+  updatedAt         DateTime          @updatedAt
+  version           Int               @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  component    Component    @relation(fields: [componentId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, componentId])
+  @@index([organizationId, status])
+}
+
+// Sprint 2 — QC Issues
+model QcIssue {
+  id                String      @id @default(cuid())
+  organizationId    String
+  batchProductionId String
+  issueType         QcIssueType
+  description       String
+  expectedValue     String?
+  actualValue       String?
+  overrideAllowed   Boolean     @default(true)
+  overrideReason    String?
+  overrideBy        String?
+  resolvedAt        DateTime?
+  createdAt         DateTime    @default(now())
+  createdBy         String      @default("system")
+  updatedAt         DateTime    @updatedAt
+  version           Int         @default(1)
+
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  batchProduction BatchProduction @relation(fields: [batchProductionId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, batchProductionId])
+  @@index([organizationId, issueType])
+}
+
+// ── Sprint 4: File Storage + Biometrics + Document Ingestion ────────
+
+enum DocumentType {
+  DEXA
+  BLOODWORK
+  CGM
+  OTHER
+}
+
+enum ParsingStatus {
+  NOT_STARTED
+  QUEUED
+  PARSED_PARTIAL
+  VERIFIED
+  FAILED
+}
+
+enum MetricVerification {
+  UNVERIFIED
+  MANUAL_ENTRY
+  PARSED_AUTO
+  CLINICIAN_VERIFIED
+}
+
+// Abstract file storage metadata (local or cloud)
+model FileAttachment {
+  id             String   @id @default(cuid())
+  organizationId String
+  storageProvider String  @default("local")   // "local" | "s3" | "r2"
+  storageBucket  String?                       // bucket / base path
+  storageKey     String                        // unique key / relative path
+  originalName   String                        // user-facing filename
+  mimeType       String
+  sizeBytes      Int
+  checksum       String?                       // SHA-256 for integrity
+  uploadedBy     String   @default("system")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  version        Int      @default(1)
+
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clientDocuments ClientDocument[]
+
+  @@index([organizationId])
+  @@index([storageKey])
+}
+
+// Date-stamped biometric snapshot for a client
+model BiometricSnapshot {
+  id             String   @id @default(cuid())
+  organizationId String
+  clientId       String
+  measuredAt     DateTime
+  heightCm       Float?
+  weightKg       Float?
+  bodyFatPct     Float?
+  leanMassKg     Float?
+  restingHr      Int?
+  notes          String?
+  source         String?   // "manual" | "dexa" | "scale" | etc.
+  createdAt      DateTime @default(now())
+  createdBy      String   @default("system")
+  updatedAt      DateTime @updatedAt
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, clientId, measuredAt])
+}
+
+// Structured client document record with file linkage
+model ClientDocument {
+  id               String        @id @default(cuid())
+  organizationId   String
+  clientId         String
+  fileAttachmentId String?
+  documentType     DocumentType
+  collectedAt      DateTime
+  uploadedAt       DateTime      @default(now())
+  sourceProvider   String?       // lab name, clinic, etc.
+  tags             String[]
+  parsingStatus    ParsingStatus @default(NOT_STARTED)
+  parsingError     String?
+  notes            String?
+  verifiedAt       DateTime?
+  verifiedBy       String?
+  createdAt        DateTime      @default(now())
+  createdBy        String        @default("system")
+  updatedAt        DateTime      @updatedAt
+  version          Int           @default(1)
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client         Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  fileAttachment FileAttachment? @relation(fields: [fileAttachmentId], references: [id], onDelete: SetNull)
+  metrics        MetricSeries[]
+
+  @@index([organizationId, clientId])
+  @@index([organizationId, documentType])
+  @@index([organizationId, parsingStatus])
+}
+
+// Normalized metric data point with provenance
+model MetricSeries {
+  id               String             @id @default(cuid())
+  organizationId   String
+  clientId         String
+  metricKey        String             // "fasting_glucose" | "ldl" | "hdl" | "triglycerides" | "hba1c" | "body_fat_pct" | "lean_mass_kg" | "resting_hr" etc.
+  value            Float
+  unit             String             // "mg/dL" | "%" | "kg" | "bpm" etc.
+  observedAt       DateTime
+  sourceDocumentId String?
+  verification     MetricVerification @default(UNVERIFIED)
+  confidenceScore  Float?
+  notes            String?
+  createdAt        DateTime           @default(now())
+  createdBy        String             @default("system")
+  updatedAt        DateTime           @updatedAt
+  version          Int                @default(1)
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client         Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  sourceDocument ClientDocument? @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, clientId, metricKey, observedAt])
+  @@index([organizationId, clientId, observedAt])
+}
+
+// ── Sprint 3: Composition + Menu Composer + Prep Optimizer ──────────
+
+enum MealSource {
+  RECIPE
+  COMPOSITION
+}
+
+enum PrepDraftStatus {
+  DRAFT
+  APPROVED
+  COMMITTED
+  CANCELLED
+}
+
+// Reusable composition template (protein + base + veg + sauce slots)
+model CompositionTemplate {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  description     String?
+  targetKcal      Float?
+  targetProteinG  Float?
+  targetCarbG     Float?
+  targetFatG      Float?
+  allergenTags    String[]
+  flavorProfiles  FlavorProfile[]
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  createdBy       String   @default("system")
+  updatedAt       DateTime @updatedAt
+  version         Int      @default(1)
+
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  slots          CompositionSlot[]
+  mealSchedules  MealSchedule[]
+
+  @@index([organizationId])
+}
+
+// Individual slot in a composition template
+model CompositionSlot {
+  id             String        @id @default(cuid())
+  templateId     String
+  slotType       ComponentType
+  componentId    String?
+  targetG        Float
+  portionG       Float?
+  sauceVariantId String?
+  slotOrder      Int
+  required       Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  template  CompositionTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  component Component?          @relation(fields: [componentId], references: [id])
+
+  @@unique([templateId, slotOrder])
+  @@index([templateId])
+}
+
+// Weekly prep draft (demand rollup → batch suggestions)
+model PrepDraft {
+  id              String          @id @default(cuid())
+  organizationId  String
+  weekStart       DateTime
+  weekEnd         DateTime
+  status          PrepDraftStatus @default(DRAFT)
+  demandPayload   Json
+  batchSuggestions Json
+  shortages       Json?
+  notes           String?
+  approvedAt      DateTime?
+  approvedBy      String?
+  createdAt       DateTime        @default(now())
+  createdBy       String          @default("system")
+  updatedAt       DateTime        @updatedAt
+  version         Int             @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, weekStart])
 }

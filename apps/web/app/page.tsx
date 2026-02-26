@@ -229,6 +229,41 @@ export default async function HomePage() {
                 <div className="kpi-label">Sauce Library</div>
                 <div className="kpi-note"><span className="badge badge-info">Browse</span></div>
               </Link>
+              <Link href={"/mappings" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">Map</div>
+                <div className="kpi-label">Import Mappings</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Resolve unmapped items</div>
+              </Link>
+              <Link href={"/substitutions" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">Sub</div>
+                <div className="kpi-label">Substitutions</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Find replacements</div>
+              </Link>
+              <Link href={"/calibration" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">Yield</div>
+                <div className="kpi-label">Yield Calibration</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Variance & proposals</div>
+              </Link>
+              <Link href={"/qc-issues" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">QC</div>
+                <div className="kpi-label">Quality Control</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Issues & overrides</div>
+              </Link>
+              <Link href={"/composer" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">Build</div>
+                <div className="kpi-label">Menu Composer</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Composition templates</div>
+              </Link>
+              <Link href={"/prep" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">Plan</div>
+                <div className="kpi-label">Prep Optimizer</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Weekly batch planning</div>
+              </Link>
+              <Link href={"/sauce-matrix" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">Sauce</div>
+                <div className="kpi-label">Sauce Matrix</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Flavors & portions</div>
+              </Link>
             </div>
             <div className="row" style={{ gap: "var(--sp-2)", marginTop: "var(--sp-4)" }}>
               <Link href={"/kitchen/print/pull-list" as any} className="btn btn-outline btn-sm">
@@ -236,6 +271,17 @@ export default async function HomePage() {
               </Link>
               <Link href={"/kitchen/print/daily-summary" as any} className="btn btn-outline btn-sm">
                 Print Daily Summary
+              </Link>
+            </div>
+          </section>
+
+          <section className="section">
+            <h2 className="section-title">Operations</h2>
+            <div className="kpi-grid">
+              <Link href={"/control-tower" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">Ops</div>
+                <div className="kpi-label">Control Tower</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Health scores & alerts</div>
               </Link>
             </div>
           </section>
@@ -271,6 +317,23 @@ export default async function HomePage() {
                   <span className="client-card-arrow">&rarr;</span>
                 </Link>
               </div>
+
+              {/* Per-client health data links */}
+              {clients.length > 0 && (
+                <div style={{ marginTop: "var(--sp-4)" }}>
+                  <h3 className="section-title" style={{ fontSize: "0.95rem" }}>Health Data</h3>
+                  <div className="kpi-grid">
+                    {clients.slice(0, 3).map((client: Client) => (
+                      <div key={client.id} style={{ display: "flex", flexDirection: "column", gap: "var(--sp-1)" }}>
+                        <div style={{ fontWeight: 600, marginBottom: "var(--sp-1)" }}>{client.name}</div>
+                        <Link href={`/clients/${client.id}/biometrics` as any} className="btn btn-outline btn-sm">Biometrics</Link>
+                        <Link href={`/clients/${client.id}/documents` as any} className="btn btn-outline btn-sm">Documents</Link>
+                        <Link href={`/clients/${client.id}/metrics` as any} className="btn btn-outline btn-sm">Metrics</Link>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </section>
           )}
         </>

@@ -25,8 +25,16 @@ const NAV_LINKS = [
   { href: "/batch-prep", label: "Batch Prep" },
   { href: "/kitchen", label: "Kitchen" },
   { href: "/sauces", label: "Sauces" },
+  { href: "/mappings", label: "Mappings" },
+  { href: "/substitutions", label: "Subs" },
+  { href: "/calibration", label: "Yield" },
+  { href: "/qc-issues", label: "QC" },
+  { href: "/composer", label: "Composer" },
+  { href: "/prep", label: "Prep Plan" },
+  { href: "/sauce-matrix", label: "Sauce Matrix" },
   { href: "/calendar", label: "Calendar" },
   { href: "/verification", label: "Verification" },
+  { href: "/control-tower", label: "Ops Tower" },
   { href: "/upload", label: "Import" },
 ] as const;
 
