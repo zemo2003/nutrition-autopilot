@@ -249,6 +249,21 @@ export default async function HomePage() {
                 <div className="kpi-label">Quality Control</div>
                 <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Issues & overrides</div>
               </Link>
+              <Link href={"/composer" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">Build</div>
+                <div className="kpi-label">Menu Composer</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Composition templates</div>
+              </Link>
+              <Link href={"/prep" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">Plan</div>
+                <div className="kpi-label">Prep Optimizer</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Weekly batch planning</div>
+              </Link>
+              <Link href={"/sauce-matrix" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">Sauce</div>
+                <div className="kpi-label">Sauce Matrix</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Flavors & portions</div>
+              </Link>
             </div>
             <div className="row" style={{ gap: "var(--sp-2)", marginTop: "var(--sp-4)" }}>
               <Link href={"/kitchen/print/pull-list" as any} className="btn btn-outline btn-sm">

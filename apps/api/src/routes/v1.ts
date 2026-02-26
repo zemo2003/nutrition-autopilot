@@ -931,6 +931,7 @@ v1Router.post("/instacart/drafts/generate", async (_req, res) => {
   const demand = new Map<string, { ingredientName: string; grams: number; skuCodes: Set<string> }>();
 
   for (const schedule of schedules) {
+    if (!schedule.sku) continue;
     const recipe = schedule.sku.recipes[0];
     if (!recipe) continue;
     for (const line of recipe.lines) {
@@ -1055,15 +1056,15 @@ v1Router.get("/schedules", async (req, res) => {
 
   return res.json({
     schedules: schedules.map((s) => {
-      const recipe = s.sku.recipes[0];
+      const recipe = s.sku?.recipes[0];
       return {
         id: s.id,
         clientId: s.clientId,
         clientName: s.client.fullName,
         skuId: s.skuId,
-        skuName: s.sku.name,
-        skuCode: s.sku.code,
-        servingSizeG: s.sku.servingSizeG ?? null,
+        skuName: s.sku?.name ?? null,
+        skuCode: s.sku?.code ?? null,
+        servingSizeG: s.sku?.servingSizeG ?? null,
         serviceDate: s.serviceDate.toISOString().slice(0, 10),
         mealSlot: s.mealSlot,
         status: s.status,
