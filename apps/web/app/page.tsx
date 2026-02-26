@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { DashboardRouter } from "../components/dashboard-router";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? process.env.API_BASE ?? "http://localhost:4000";
 
@@ -13,12 +13,6 @@ type SystemState = {
     labels: number;
     openVerificationTasks: number;
   };
-};
-
-type Client = {
-  id: string;
-  name: string;
-  externalRef?: string;
 };
 
 type QualitySummary = {
@@ -106,238 +100,27 @@ async function getQualitySummary() {
 }
 
 export default async function HomePage() {
-  const [state, clients, quality, sauceCount] = await Promise.all([getState(), getClients(), getQualitySummary(), getSauceCount()]);
+  const [state, clients, quality, sauceCount] = await Promise.all([
+    getState(),
+    getClients(),
+    getQualitySummary(),
+    getSauceCount(),
+  ]);
+
   const isEmpty = !state || !state.hasCommittedSot;
+  const counts = state?.counts ?? {
+    activeSkus: 0,
+    activeIngredients: 0,
+    lotsOnHand: 0,
+    schedules: 0,
+    servedMeals: 0,
+    labels: 0,
+    openVerificationTasks: 0,
+  };
 
   return (
-    <div className="page-shell">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Dashboard</h1>
-          <p className="page-subtitle">
-            Your weekly nutrition overview at a glance.
-          </p>
-        </div>
-        <div className="page-header-actions">
-          <Link href="/upload" className="btn btn-primary btn-lg">
-            Import Data
-          </Link>
-        </div>
-      </div>
-
-      {isEmpty ? (
-        <section className="card">
-          <div className="state-box">
-            <div className="state-icon">&#x1f4e6;</div>
-            <div className="state-title">No Data Yet</div>
-            <div className="state-desc">
-              Upload your SKU catalog and Instacart orders to get started.
-            </div>
-            <Link href="/upload" className="btn btn-primary mt-4">
-              Import Data
-            </Link>
-          </div>
-        </section>
-      ) : (
-        <>
-          <section className="section">
-            <h2 className="section-title">Overview</h2>
-            <div className="kpi-grid">
-              <div className="kpi">
-                <div className="kpi-value">{state.counts.activeSkus}</div>
-                <div className="kpi-label">Active SKUs</div>
-              </div>
-              <div className="kpi">
-                <div className="kpi-value">{state.counts.activeIngredients}</div>
-                <div className="kpi-label">Ingredients</div>
-              </div>
-              <div className="kpi">
-                <div className="kpi-value">{state.counts.lotsOnHand}</div>
-                <div className="kpi-label">Inventory Lots</div>
-              </div>
-              <div className="kpi">
-                <div className="kpi-value">{state.counts.schedules}</div>
-                <div className="kpi-label">Schedules</div>
-              </div>
-              <div className="kpi">
-                <div className="kpi-value">{state.counts.servedMeals}</div>
-                <div className="kpi-label">Served Meals</div>
-              </div>
-              <div className="kpi">
-                <div className="kpi-value">{state.counts.labels}</div>
-                <div className="kpi-label">Frozen Labels</div>
-              </div>
-              <div className="kpi">
-                <div className="kpi-value">{state.counts.openVerificationTasks}</div>
-                <div className="kpi-label">Open Verifications</div>
-                {state.counts.openVerificationTasks > 0 && (
-                  <div className="kpi-note">
-                    <span className="badge badge-warn">Needs Attention</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          </section>
-
-          {quality && (
-            <section className="section">
-              <h2 className="section-title">Quality Summary ({quality.month})</h2>
-              <div className="kpi-grid">
-                <div className="kpi">
-                  <div className="kpi-value">{(quality.coverage.productFull40CoverageRatio * 100).toFixed(0)}%</div>
-                  <div className="kpi-label">Nutrient Coverage</div>
-                </div>
-                <div className="kpi">
-                  <div className="kpi-value">{quality.evidence.provisionalLabels}</div>
-                  <div className="kpi-label">Provisional Labels</div>
-                </div>
-                <div className="kpi">
-                  <div className="kpi-value">{quality.evidence.inferredRows}</div>
-                  <div className="kpi-label">Estimated Nutrients</div>
-                </div>
-                <div className="kpi">
-                  <div className="kpi-value">{quality.totals.criticalOrHighVerificationTasks}</div>
-                  <div className="kpi-label">Open Verifications</div>
-                  <div className="kpi-note">
-                    <Link href={"/verification" as any} className="btn btn-outline btn-sm">Review</Link>
-                  </div>
-                </div>
-              </div>
-            </section>
-          )}
-
-          <section className="section">
-            <h2 className="section-title">Kitchen Ops</h2>
-            <div className="kpi-grid">
-              <Link href={"/inventory" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
-                <div className="kpi-value">{state.counts.lotsOnHand}</div>
-                <div className="kpi-label">Inventory Lots</div>
-                <div className="kpi-note"><span className="badge badge-info">View</span></div>
-              </Link>
-              <Link href={"/batch-prep" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
-                <div className="kpi-value">Prep</div>
-                <div className="kpi-label">Batch Prep</div>
-                <div className="kpi-note"><span className="badge badge-info">Open</span></div>
-              </Link>
-              <Link href={"/kitchen" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
-                <div className="kpi-value">Live</div>
-                <div className="kpi-label">Kitchen Mode</div>
-                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Active batch execution</div>
-              </Link>
-              <Link href={"/sauces" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
-                <div className="kpi-value">{sauceCount}</div>
-                <div className="kpi-label">Sauce Library</div>
-                <div className="kpi-note"><span className="badge badge-info">Browse</span></div>
-              </Link>
-              <Link href={"/mappings" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
-                <div className="kpi-value">Map</div>
-                <div className="kpi-label">Import Mappings</div>
-                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Resolve unmapped items</div>
-              </Link>
-              <Link href={"/substitutions" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
-                <div className="kpi-value">Sub</div>
-                <div className="kpi-label">Substitutions</div>
-                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Find replacements</div>
-              </Link>
-              <Link href={"/calibration" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
-                <div className="kpi-value">Yield</div>
-                <div className="kpi-label">Yield Calibration</div>
-                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Variance & proposals</div>
-              </Link>
-              <Link href={"/qc-issues" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
-                <div className="kpi-value">QC</div>
-                <div className="kpi-label">Quality Control</div>
-                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Issues & overrides</div>
-              </Link>
-              <Link href={"/composer" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
-                <div className="kpi-value">Build</div>
-                <div className="kpi-label">Menu Composer</div>
-                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Composition templates</div>
-              </Link>
-              <Link href={"/prep" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
-                <div className="kpi-value">Plan</div>
-                <div className="kpi-label">Prep Optimizer</div>
-                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Weekly batch planning</div>
-              </Link>
-              <Link href={"/sauce-matrix" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
-                <div className="kpi-value">Sauce</div>
-                <div className="kpi-label">Sauce Matrix</div>
-                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Flavors & portions</div>
-              </Link>
-            </div>
-            <div className="row" style={{ gap: "var(--sp-2)", marginTop: "var(--sp-4)" }}>
-              <Link href={"/kitchen/print/pull-list" as any} className="btn btn-outline btn-sm">
-                Print Pull List
-              </Link>
-              <Link href={"/kitchen/print/daily-summary" as any} className="btn btn-outline btn-sm">
-                Print Daily Summary
-              </Link>
-            </div>
-          </section>
-
-          <section className="section">
-            <h2 className="section-title">Operations</h2>
-            <div className="kpi-grid">
-              <Link href={"/control-tower" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
-                <div className="kpi-value">Ops</div>
-                <div className="kpi-label">Control Tower</div>
-                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Health scores & alerts</div>
-              </Link>
-            </div>
-          </section>
-
-          {clients.length > 0 && (
-            <section className="section">
-              <h2 className="section-title">Clients</h2>
-              <div className="client-grid">
-                {clients.map((client: Client) => (
-                  <Link
-                    key={client.id}
-                    href={`/clients/${client.id}/calendar`}
-                    className="client-card"
-                  >
-                    <div className="client-avatar">
-                      {client.name.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="client-card-info">
-                      <div className="client-card-name">{client.name}</div>
-                      {client.externalRef && (
-                        <div className="client-card-meta">{client.externalRef}</div>
-                      )}
-                    </div>
-                    <span className="client-card-arrow">&rarr;</span>
-                  </Link>
-                ))}
-                <Link href={"/clients/profile" as any} className="client-card" style={{ borderStyle: "dashed" }}>
-                  <div className="client-avatar" style={{ background: "var(--c-surface-alt)" }}>P</div>
-                  <div className="client-card-info">
-                    <div className="client-card-name">Client Profile</div>
-                    <div className="client-card-meta">Health data & preferences</div>
-                  </div>
-                  <span className="client-card-arrow">&rarr;</span>
-                </Link>
-              </div>
-
-              {/* Per-client health data links */}
-              {clients.length > 0 && (
-                <div style={{ marginTop: "var(--sp-4)" }}>
-                  <h3 className="section-title" style={{ fontSize: "0.95rem" }}>Health Data</h3>
-                  <div className="kpi-grid">
-                    {clients.slice(0, 3).map((client: Client) => (
-                      <div key={client.id} style={{ display: "flex", flexDirection: "column", gap: "var(--sp-1)" }}>
-                        <div style={{ fontWeight: 600, marginBottom: "var(--sp-1)" }}>{client.name}</div>
-                        <Link href={`/clients/${client.id}/biometrics` as any} className="btn btn-outline btn-sm">Biometrics</Link>
-                        <Link href={`/clients/${client.id}/documents` as any} className="btn btn-outline btn-sm">Documents</Link>
-                        <Link href={`/clients/${client.id}/metrics` as any} className="btn btn-outline btn-sm">Metrics</Link>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </section>
-          )}
-        </>
-      )}
-    </div>
+    <DashboardRouter
+      data={{ counts, clients, sauceCount, quality, isEmpty }}
+    />
   );
 }

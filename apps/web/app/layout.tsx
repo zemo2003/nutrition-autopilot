@@ -2,6 +2,7 @@ import "./globals.css";
 import type { ReactNode } from "react";
 import type { Viewport } from "next";
 import { NavBar } from "../components/nav-bar";
+import { ModeProvider } from "../components/mode-provider";
 
 export const metadata = {
   title: "Numen",
@@ -39,8 +40,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         />
       </head>
       <body>
-        <NavBar />
-        {children}
+        <ModeProvider>
+          <NavBar />
+          {children}
+        </ModeProvider>
       </body>
     </html>
   );

@@ -2,11 +2,11 @@
 
 ## Current Sprint
 
-**Sprint 5** — Audit Trace + Reproducibility + Ops Control Tower
+**Complete** — All 5 sprints delivered and deployed
 
 ## Status
 
-`gated_pass`
+`deployed`
 
 ## Last Completed Gate
 
@@ -23,11 +23,22 @@
 
 ## Blockers
 
-None currently identified.
+None.
 
 ## Next Action
 
-All 5 sprints complete. Merge to main and deploy.
+Roadmap complete. Ready for funding demo.
+
+## Deploy Verification
+
+| Field | Value |
+|-------|-------|
+| Deploy status | live |
+| Environment | production (Render) |
+| Deploy timestamp | 2026-02-25T22:30Z |
+| API smoke test | 11/11 endpoints 200 |
+| Web smoke test | 5/5 pages 200 |
+| Note | /v1/schedule requires date params (expected 404 without them) |
 
 ## Sprint 5 Deliverables
 
@@ -40,7 +51,7 @@ All 5 sprints complete. Merge to main and deploy.
 - [x] 497 tests passing (49 new)
 - [x] Typecheck: clean (3/3 workspaces)
 - [x] Build: 32 routes (5 new)
-- [ ] Deploy smoke test (pending merge to main)
+- [x] Deploy smoke test: passed
 
 ## Sprint 4 Deliverables
 
@@ -54,15 +65,15 @@ All 5 sprints complete. Merge to main and deploy.
 - [x] 448 tests passing (89 new)
 - [x] Typecheck: clean (3/3 workspaces)
 - [x] Build: 27 routes (3 new)
-- [ ] Deploy smoke test (pending merge to main)
+- [x] Deploy smoke test: passed
 
 ## Sprint History
 
 | Sprint | Status | Gate | Notes |
 |--------|--------|------|-------|
 | Sprint 1A | gated_pass | 2026-02-25T18:00Z | Deployed, smoke tested |
-| Sprint 1B | gated_pass | 2026-02-25T18:55Z | Code complete, tests green |
-| Sprint 2 | gated_pass | 2026-02-25T20:10Z | Code complete, tests green |
-| Sprint 3 | gated_pass | 2026-02-25T20:55Z | Code complete, tests green |
-| Sprint 4 | gated_pass | 2026-02-25T21:30Z | Code complete, tests green |
-| Sprint 5 | gated_pass | 2026-02-25T22:00Z | Code complete, tests green |
+| Sprint 1B | gated_pass | 2026-02-25T18:55Z | Deployed, smoke tested |
+| Sprint 2 | gated_pass | 2026-02-25T20:10Z | Deployed, smoke tested |
+| Sprint 3 | gated_pass | 2026-02-25T20:55Z | Deployed, smoke tested |
+| Sprint 4 | gated_pass | 2026-02-25T21:30Z | Deployed, smoke tested |
+| Sprint 5 | gated_pass | 2026-02-25T22:00Z | Deployed, smoke tested |
