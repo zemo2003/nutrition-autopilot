@@ -554,7 +554,7 @@ model MealServiceEvent {
   id                      String         @id @default(cuid())
   organizationId          String
   clientId                String
-  skuId                   String
+  skuId                   String?
   mealScheduleId          String         @unique
   servedAt                DateTime       @default(now())
   servedByUserId          String
@@ -567,7 +567,7 @@ model MealServiceEvent {
 
   organization       Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   client             Client                @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  sku                Sku                   @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  sku                Sku?                  @relation(fields: [skuId], references: [id], onDelete: Restrict)
   mealSchedule       MealSchedule          @relation(fields: [mealScheduleId], references: [id], onDelete: Restrict)
   servedBy           User                  @relation("servedByUser", fields: [servedByUserId], references: [id], onDelete: Restrict)
   lotConsumptions    LotConsumptionEvent[]

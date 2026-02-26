@@ -1171,27 +1171,25 @@ v1Router.patch("/schedule/:id/status", async (req, res) => {
   });
 
   let freeze = null;
-  try {
-    if (status === "DONE") {
+  let freezeWarning: string | null = null;
+
+  if (status === "DONE") {
+    try {
       freeze = await freezeLabelFromScheduleDone({
         mealScheduleId: schedule.id,
         servedByUserId: user.id
       });
+    } catch (error) {
+      freezeWarning = error instanceof Error ? error.message : "Label freeze failed";
     }
-  } catch (error) {
-    // Keep schedule integrity: if freeze fails, restore to PLANNED.
-    await prisma.mealSchedule.update({
-      where: { id: schedule.id },
-      data: {
-        status: "PLANNED",
-        version: { increment: 1 }
-      }
-    });
-    const message = error instanceof Error ? error.message : "Label freeze failed";
-    return res.status(400).json({ error: message });
   }
 
-  return res.json({ scheduleId: schedule.id, status: status === "DONE" && !freeze ? "PLANNED" : schedule.status, freeze });
+  return res.json({
+    scheduleId: schedule.id,
+    status: schedule.status,
+    freeze,
+    freezeWarning,
+  });
 });
 
 v1Router.get("/clients/:clientId/calendar", async (req, res) => {
@@ -1221,7 +1219,8 @@ v1Router.get("/clients/:clientId/calendar", async (req, res) => {
       id: e.id,
       servedAt: e.servedAt,
       mealSlot: e.mealSchedule.mealSlot,
-      sku: { id: e.sku.id, code: e.sku.code, name: e.sku.name },
+      skuName: e.sku?.name ?? e.mealSchedule.notes ?? "Meal",
+      sku: e.sku ? { id: e.sku.id, code: e.sku.code, name: e.sku.name } : null,
       finalLabelSnapshotId: e.finalLabelSnapshotId
     }))
   });
@@ -1264,12 +1263,13 @@ v1Router.get("/clients/:clientId/calendar/export", async (req, res) => {
     const label = e.finalLabelSnapshot?.renderPayload as Record<string, unknown> | null;
     const fda = (label?.roundedFda ?? {}) as Record<string, number>;
 
+    const mealName = e.sku?.name ?? e.mealSchedule.notes ?? "Meal";
     if (e.lotConsumptions.length > 0) {
       for (const lc of e.lotConsumptions) {
         rows.push({
           Client: clientName,
           Date: e.servedAt.toISOString().slice(0, 10),
-          Meal: e.sku.name,
+          Meal: mealName,
           "Meal Slot": e.mealSchedule.mealSlot,
           Ingredient: lc.recipeLine.ingredient.name,
           "Grams Served": Number(lc.gramsConsumed.toFixed(1)),
@@ -1286,7 +1286,7 @@ v1Router.get("/clients/:clientId/calendar/export", async (req, res) => {
       rows.push({
         Client: clientName,
         Date: e.servedAt.toISOString().slice(0, 10),
-        Meal: e.sku.name,
+        Meal: mealName,
         "Meal Slot": e.mealSchedule.mealSlot,
         Ingredient: "",
         "Grams Served": "",
@@ -1347,7 +1347,7 @@ v1Router.get("/meals/:serviceEventId", async (req, res) => {
     servedAt: event.servedAt,
     servedBy: event.servedBy.fullName,
     client: { id: event.client.id, name: event.client.fullName },
-    sku: { id: event.sku.id, code: event.sku.code, name: event.sku.name },
+    sku: event.sku ? { id: event.sku.id, code: event.sku.code, name: event.sku.name } : null,
     schedule: {
       id: event.mealSchedule.id,
       serviceDate: event.mealSchedule.serviceDate,

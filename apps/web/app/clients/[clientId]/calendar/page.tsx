@@ -5,7 +5,8 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? process.env.API_BASE ?? "ht
 type CalendarEvent = {
   id: string;
   servedAt: string;
-  sku: { name: string };
+  skuName?: string;
+  sku: { name: string } | null;
   mealSlot?: string;
   finalLabelSnapshotId: string | null;
 };
@@ -188,7 +189,7 @@ export default async function CalendarPage({
               {(grouped[day] ?? []).map((event) => (
                 <div key={event.id} className="meal-card">
                   <div className="meal-info">
-                    <div className="meal-name">{event.sku.name}</div>
+                    <div className="meal-name">{event.skuName ?? event.sku?.name ?? "Meal"}</div>
                     <div className="meal-time">
                       {formatTime(event.servedAt)}
                       {event.mealSlot && (

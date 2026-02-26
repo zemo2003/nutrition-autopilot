@@ -337,11 +337,26 @@ export async function freezeLabelFromScheduleDone(input: {
 
     const existingEvent = await tx.mealServiceEvent.findUnique({ where: { mealScheduleId: schedule.id } });
     if (existingEvent) {
-      return { mealServiceEventId: existingEvent.id, labelSnapshotId: existingEvent.finalLabelSnapshotId };
+      return { mealServiceEventId: existingEvent.id, labelSnapshotId: existingEvent.finalLabelSnapshotId, warning: null };
     }
 
+    // Always create the service event so the meal appears on the calendar
+    const serviceEvent = await tx.mealServiceEvent.create({
+      data: {
+        organizationId: schedule.organizationId,
+        clientId: schedule.clientId,
+        skuId: schedule.skuId,
+        mealScheduleId: schedule.id,
+        servedAt: servedAtFromSchedule(schedule.serviceDate, schedule.mealSlot),
+        servedByUserId: input.servedByUserId,
+        scheduleStatusAtService: ScheduleStatus.DONE,
+        createdBy: "system"
+      }
+    });
+
+    // Composition-based meals (no SKU) — mark fed, skip label freeze
     if (!schedule.skuId || !schedule.sku) {
-      throw new Error("Cannot freeze label for composition-based meal (no SKU)");
+      return { mealServiceEventId: serviceEvent.id, labelSnapshotId: null, warning: "Composition-based meal — no label frozen" };
     }
     const scheduleSku = schedule.sku;
     const scheduleSkuId = schedule.skuId;
@@ -357,24 +372,12 @@ export async function freezeLabelFromScheduleDone(input: {
     });
 
     if (!recipe) {
-      throw new Error("No active recipe for schedule SKU");
+      return { mealServiceEventId: serviceEvent.id, labelSnapshotId: null, warning: "No active recipe for SKU — no label frozen" };
     }
-
-    const serviceEvent = await tx.mealServiceEvent.create({
-      data: {
-        organizationId: schedule.organizationId,
-        clientId: schedule.clientId,
-        skuId: scheduleSkuId,
-        mealScheduleId: schedule.id,
-        servedAt: servedAtFromSchedule(schedule.serviceDate, schedule.mealSlot),
-        servedByUserId: input.servedByUserId,
-        scheduleStatusAtService: ScheduleStatus.DONE,
-        createdBy: "system"
-      }
-    });
 
     const consumedLots: ConsumedLot[] = [];
     const strictMode = (schedule.notes ?? "").toLowerCase() !== "pilot_backfill";
+    const lotWarnings: string[] = [];
 
     for (const line of recipe.lines) {
       let remaining = line.targetGPerServing * schedule.plannedServings;
@@ -402,7 +405,8 @@ export async function freezeLabelFromScheduleDone(input: {
       });
 
       if (!lots.length) {
-        throw new Error(`No inventory lot found for ingredient ${line.ingredient.name}`);
+        lotWarnings.push(`No inventory for ${line.ingredient.name}`);
+        continue;
       }
 
       for (const lot of lots) {
@@ -487,13 +491,16 @@ export async function freezeLabelFromScheduleDone(input: {
       }
 
       if (remaining > 0) {
-        if (strictMode) {
-          throw new Error(
-            `Quality gate blocked freeze for ingredient ${line.ingredient.name}; only synthetic or historical-exception lots available (need real inventory)`
-          );
-        }
-        throw new Error(`Insufficient lot quantity for ingredient ${line.ingredient.name}`);
+        lotWarnings.push(`Insufficient inventory for ${line.ingredient.name} (${remaining.toFixed(0)}g short)`);
       }
+    }
+
+    // If no lots were consumed at all, return early without label freeze
+    if (consumedLots.length === 0) {
+      const warning = lotWarnings.length > 0
+        ? `No label frozen: ${lotWarnings.join("; ")}`
+        : "No label frozen: no lots consumed";
+      return { mealServiceEventId: serviceEvent.id, labelSnapshotId: null, warning };
     }
 
     const skuEvidence = summarizeEvidence(
@@ -768,7 +775,10 @@ export async function freezeLabelFromScheduleDone(input: {
       data: { finalLabelSnapshotId: skuLabel.id }
     });
 
-    return { mealServiceEventId: serviceEvent.id, labelSnapshotId: skuLabel.id };
+    const warning = lotWarnings.length > 0
+      ? `Label frozen with warnings: ${lotWarnings.join("; ")}`
+      : null;
+    return { mealServiceEventId: serviceEvent.id, labelSnapshotId: skuLabel.id, warning };
   }, { timeout: 60000 });
 }
 
