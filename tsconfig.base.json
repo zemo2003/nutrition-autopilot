@@ -13,7 +13,13 @@
       "@nutrition/nutrition-engine/substitution-engine": ["services/nutrition-engine/src/substitution-engine.ts"],
       "@nutrition/nutrition-engine/yield-calibration": ["services/nutrition-engine/src/yield-calibration.ts"],
       "@nutrition/nutrition-engine/composition-engine": ["services/nutrition-engine/src/composition-engine.ts"],
-      "@nutrition/nutrition-engine/prep-optimizer": ["services/nutrition-engine/src/prep-optimizer.ts"]
+      "@nutrition/nutrition-engine/prep-optimizer": ["services/nutrition-engine/src/prep-optimizer.ts"],
+      "@nutrition/nutrition-engine/biometrics-engine": ["services/nutrition-engine/src/biometrics-engine.ts"],
+      "@nutrition/nutrition-engine/metrics-engine": ["services/nutrition-engine/src/metrics-engine.ts"],
+      "@nutrition/nutrition-engine/file-storage": ["services/nutrition-engine/src/file-storage.ts"],
+      "@nutrition/nutrition-engine/audit-trace": ["services/nutrition-engine/src/audit-trace.ts"],
+      "@nutrition/nutrition-engine/reproducibility": ["services/nutrition-engine/src/reproducibility.ts"],
+      "@nutrition/nutrition-engine/ops-control-tower": ["services/nutrition-engine/src/ops-control-tower.ts"]
     },
     "strict": true,
     "resolveJsonModule": true,

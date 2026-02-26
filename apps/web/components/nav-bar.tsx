@@ -34,6 +34,7 @@ const NAV_LINKS = [
   { href: "/sauce-matrix", label: "Sauce Matrix" },
   { href: "/calendar", label: "Calendar" },
   { href: "/verification", label: "Verification" },
+  { href: "/control-tower", label: "Ops Tower" },
   { href: "/upload", label: "Import" },
 ] as const;
 

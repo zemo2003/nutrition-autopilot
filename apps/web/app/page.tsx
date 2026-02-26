@@ -275,6 +275,17 @@ export default async function HomePage() {
             </div>
           </section>
 
+          <section className="section">
+            <h2 className="section-title">Operations</h2>
+            <div className="kpi-grid">
+              <Link href={"/control-tower" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+                <div className="kpi-value">Ops</div>
+                <div className="kpi-label">Control Tower</div>
+                <div className="kpi-note" style={{ color: "var(--c-ink-soft)" }}>Health scores & alerts</div>
+              </Link>
+            </div>
+          </section>
+
           {clients.length > 0 && (
             <section className="section">
               <h2 className="section-title">Clients</h2>
@@ -306,6 +317,23 @@ export default async function HomePage() {
                   <span className="client-card-arrow">&rarr;</span>
                 </Link>
               </div>
+
+              {/* Per-client health data links */}
+              {clients.length > 0 && (
+                <div style={{ marginTop: "var(--sp-4)" }}>
+                  <h3 className="section-title" style={{ fontSize: "0.95rem" }}>Health Data</h3>
+                  <div className="kpi-grid">
+                    {clients.slice(0, 3).map((client: Client) => (
+                      <div key={client.id} style={{ display: "flex", flexDirection: "column", gap: "var(--sp-1)" }}>
+                        <div style={{ fontWeight: 600, marginBottom: "var(--sp-1)" }}>{client.name}</div>
+                        <Link href={`/clients/${client.id}/biometrics` as any} className="btn btn-outline btn-sm">Biometrics</Link>
+                        <Link href={`/clients/${client.id}/documents` as any} className="btn btn-outline btn-sm">Documents</Link>
+                        <Link href={`/clients/${client.id}/metrics` as any} className="btn btn-outline btn-sm">Metrics</Link>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </section>
           )}
         </>

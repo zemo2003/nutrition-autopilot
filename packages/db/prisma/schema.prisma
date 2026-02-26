@@ -237,6 +237,10 @@ model Organization {
   qcIssues              QcIssue[]
   compositionTemplates  CompositionTemplate[]
   prepDrafts            PrepDraft[]
+  fileAttachments       FileAttachment[]
+  biometricSnapshots    BiometricSnapshot[]
+  clientDocuments       ClientDocument[]
+  metricSeries          MetricSeries[]
 }
 
 model User {
@@ -311,9 +315,12 @@ model Client {
   updatedAt                DateTime @updatedAt
   version                  Int      @default(1)
 
-  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  mealSchedules     MealSchedule[]
-  mealServiceEvents MealServiceEvent[]
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  mealSchedules      MealSchedule[]
+  mealServiceEvents  MealServiceEvent[]
+  biometricSnapshots BiometricSnapshot[]
+  clientDocuments    ClientDocument[]
+  metricSeries       MetricSeries[]
 
   @@unique([organizationId, externalRef])
   @@index([organizationId])
@@ -1005,6 +1012,134 @@ model QcIssue {
 
   @@index([organizationId, batchProductionId])
   @@index([organizationId, issueType])
+}
+
+// ── Sprint 4: File Storage + Biometrics + Document Ingestion ────────
+
+enum DocumentType {
+  DEXA
+  BLOODWORK
+  CGM
+  OTHER
+}
+
+enum ParsingStatus {
+  NOT_STARTED
+  QUEUED
+  PARSED_PARTIAL
+  VERIFIED
+  FAILED
+}
+
+enum MetricVerification {
+  UNVERIFIED
+  MANUAL_ENTRY
+  PARSED_AUTO
+  CLINICIAN_VERIFIED
+}
+
+// Abstract file storage metadata (local or cloud)
+model FileAttachment {
+  id             String   @id @default(cuid())
+  organizationId String
+  storageProvider String  @default("local")   // "local" | "s3" | "r2"
+  storageBucket  String?                       // bucket / base path
+  storageKey     String                        // unique key / relative path
+  originalName   String                        // user-facing filename
+  mimeType       String
+  sizeBytes      Int
+  checksum       String?                       // SHA-256 for integrity
+  uploadedBy     String   @default("system")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  version        Int      @default(1)
+
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clientDocuments ClientDocument[]
+
+  @@index([organizationId])
+  @@index([storageKey])
+}
+
+// Date-stamped biometric snapshot for a client
+model BiometricSnapshot {
+  id             String   @id @default(cuid())
+  organizationId String
+  clientId       String
+  measuredAt     DateTime
+  heightCm       Float?
+  weightKg       Float?
+  bodyFatPct     Float?
+  leanMassKg     Float?
+  restingHr      Int?
+  notes          String?
+  source         String?   // "manual" | "dexa" | "scale" | etc.
+  createdAt      DateTime @default(now())
+  createdBy      String   @default("system")
+  updatedAt      DateTime @updatedAt
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, clientId, measuredAt])
+}
+
+// Structured client document record with file linkage
+model ClientDocument {
+  id               String        @id @default(cuid())
+  organizationId   String
+  clientId         String
+  fileAttachmentId String?
+  documentType     DocumentType
+  collectedAt      DateTime
+  uploadedAt       DateTime      @default(now())
+  sourceProvider   String?       // lab name, clinic, etc.
+  tags             String[]
+  parsingStatus    ParsingStatus @default(NOT_STARTED)
+  parsingError     String?
+  notes            String?
+  verifiedAt       DateTime?
+  verifiedBy       String?
+  createdAt        DateTime      @default(now())
+  createdBy        String        @default("system")
+  updatedAt        DateTime      @updatedAt
+  version          Int           @default(1)
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client         Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  fileAttachment FileAttachment? @relation(fields: [fileAttachmentId], references: [id], onDelete: SetNull)
+  metrics        MetricSeries[]
+
+  @@index([organizationId, clientId])
+  @@index([organizationId, documentType])
+  @@index([organizationId, parsingStatus])
+}
+
+// Normalized metric data point with provenance
+model MetricSeries {
+  id               String             @id @default(cuid())
+  organizationId   String
+  clientId         String
+  metricKey        String             // "fasting_glucose" | "ldl" | "hdl" | "triglycerides" | "hba1c" | "body_fat_pct" | "lean_mass_kg" | "resting_hr" etc.
+  value            Float
+  unit             String             // "mg/dL" | "%" | "kg" | "bpm" etc.
+  observedAt       DateTime
+  sourceDocumentId String?
+  verification     MetricVerification @default(UNVERIFIED)
+  confidenceScore  Float?
+  notes            String?
+  createdAt        DateTime           @default(now())
+  createdBy        String             @default("system")
+  updatedAt        DateTime           @updatedAt
+  version          Int                @default(1)
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client         Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  sourceDocument ClientDocument? @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, clientId, metricKey, observedAt])
+  @@index([organizationId, clientId, observedAt])
 }
 
 // ── Sprint 3: Composition + Menu Composer + Prep Optimizer ──────────

@@ -10,7 +10,13 @@
     "./substitution-engine": "./dist/substitution-engine.js",
     "./yield-calibration": "./dist/yield-calibration.js",
     "./composition-engine": "./dist/composition-engine.js",
-    "./prep-optimizer": "./dist/prep-optimizer.js"
+    "./prep-optimizer": "./dist/prep-optimizer.js",
+    "./biometrics-engine": "./dist/biometrics-engine.js",
+    "./metrics-engine": "./dist/metrics-engine.js",
+    "./file-storage": "./dist/file-storage.js",
+    "./audit-trace": "./dist/audit-trace.js",
+    "./reproducibility": "./dist/reproducibility.js",
+    "./ops-control-tower": "./dist/ops-control-tower.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

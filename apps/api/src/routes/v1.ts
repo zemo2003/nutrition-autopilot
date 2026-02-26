@@ -6,7 +6,7 @@ import { execFile as execFileCb } from "node:child_process";
 import express from "express";
 import multer from "multer";
 import { addHours, endOfMonth, parse, startOfMonth } from "date-fns";
-import { prisma, NutrientSourceType, VerificationStatus, VerificationTaskStatus, VerificationTaskSeverity, ScheduleStatus, BatchStatus, ComponentType, StorageLocation, SauceVariantType, BatchCheckpointType, MappingResolutionSource, SubstitutionStatus, CalibrationStatus, QcIssueType, MealSource, PrepDraftStatus } from "@nutrition/db";
+import { prisma, NutrientSourceType, VerificationStatus, VerificationTaskStatus, VerificationTaskSeverity, ScheduleStatus, BatchStatus, ComponentType, StorageLocation, SauceVariantType, BatchCheckpointType, MappingResolutionSource, SubstitutionStatus, CalibrationStatus, QcIssueType, MealSource, PrepDraftStatus, DocumentType, ParsingStatus, MetricVerification } from "@nutrition/db";
 import { parseInstacartOrders, parsePilotMeals, parseSotWorkbook, mapOrderLineToIngredient } from "@nutrition/importers";
 import { getDefaultUser, getPrimaryOrganization } from "../lib/context.js";
 import { freezeLabelFromScheduleDone, buildLineageTree } from "../lib/label-freeze.js";
@@ -1196,7 +1196,7 @@ v1Router.patch("/schedule/:id/status", async (req, res) => {
 
 v1Router.get("/clients/:clientId/calendar", async (req, res) => {
   const org = await getPrimaryOrganization();
-  const { clientId } = req.params;
+  const clientId = req.params.clientId!;
   const month = String(req.query.month || new Date().toISOString().slice(0, 7));
   const { start, end } = monthBounds(month);
 
@@ -1230,7 +1230,7 @@ v1Router.get("/clients/:clientId/calendar", async (req, res) => {
 v1Router.get("/clients/:clientId/calendar/export", async (req, res) => {
   const XLSX = await import("xlsx");
   const org = await getPrimaryOrganization();
-  const { clientId } = req.params;
+  const clientId = req.params.clientId!;
   const month = String(req.query.month || new Date().toISOString().slice(0, 7));
   const { start, end } = monthBounds(month);
 
@@ -2212,7 +2212,7 @@ v1Router.patch("/batches/:batchId/status", async (req, res) => {
 
 v1Router.get("/clients/:clientId", async (req, res) => {
   const org = await getPrimaryOrganization();
-  const { clientId } = req.params;
+  const clientId = req.params.clientId!;
 
   const client = await prisma.client.findFirst({
     where: { id: clientId, organizationId: org.id },
@@ -2240,7 +2240,7 @@ v1Router.get("/clients/:clientId", async (req, res) => {
 
 v1Router.patch("/clients/:clientId", async (req, res) => {
   const org = await getPrimaryOrganization();
-  const { clientId } = req.params;
+  const clientId = req.params.clientId!;
   const { email, phone, heightCm, weightKg, goals, preferences, exclusions } = req.body as {
     email?: string;
     phone?: string;
@@ -2287,7 +2287,7 @@ v1Router.patch("/clients/:clientId", async (req, res) => {
 
 v1Router.post("/clients/:clientId/body-composition", async (req, res) => {
   const org = await getPrimaryOrganization();
-  const { clientId } = req.params;
+  const clientId = req.params.clientId!;
   const { date, bodyFatPct, leanMassKg, source } = req.body as {
     date?: string;
     bodyFatPct?: number;
@@ -2322,7 +2322,7 @@ v1Router.post("/clients/:clientId/body-composition", async (req, res) => {
 
 v1Router.post("/clients/:clientId/file-records", async (req, res) => {
   const org = await getPrimaryOrganization();
-  const { clientId } = req.params;
+  const clientId = req.params.clientId!;
   const { date, type, fileName, notes } = req.body as {
     date?: string;
     type?: string;
@@ -4183,4 +4183,628 @@ v1Router.get("/sauce-matrix", async (req, res) => {
   }));
 
   return res.json({ sauces: matrix, count: matrix.length });
+});
+
+// ── Sprint 4: Biometrics, Documents, Metrics, File Storage ──────────
+
+/** GET /v1/clients/:clientId/biometrics — list biometric snapshots */
+v1Router.get("/clients/:clientId/biometrics", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const clientId = req.params.clientId!;
+  const snapshots = await prisma.biometricSnapshot.findMany({
+    where: { organizationId: org.id, clientId },
+    orderBy: { measuredAt: "desc" },
+  });
+  return res.json({ snapshots, count: snapshots.length });
+});
+
+/** POST /v1/clients/:clientId/biometrics — create biometric snapshot */
+v1Router.post("/clients/:clientId/biometrics", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const user = await getDefaultUser();
+  const clientId = req.params.clientId!;
+  const { measuredAt, heightCm, weightKg, bodyFatPct, leanMassKg, restingHr, notes, source } = req.body;
+
+  if (!measuredAt) return res.status(400).json({ error: "measuredAt is required" });
+
+  const snapshot = await prisma.biometricSnapshot.create({
+    data: {
+      organizationId: org.id,
+      clientId,
+      measuredAt: new Date(measuredAt),
+      heightCm: heightCm != null ? Number(heightCm) : null,
+      weightKg: weightKg != null ? Number(weightKg) : null,
+      bodyFatPct: bodyFatPct != null ? Number(bodyFatPct) : null,
+      leanMassKg: leanMassKg != null ? Number(leanMassKg) : null,
+      restingHr: restingHr != null ? Number(restingHr) : null,
+      notes: notes ?? null,
+      source: source ?? "manual",
+      createdBy: user.id,
+    },
+  });
+  return res.status(201).json(snapshot);
+});
+
+/** PATCH /v1/clients/:clientId/biometrics/:id — update biometric snapshot */
+v1Router.patch("/clients/:clientId/biometrics/:id", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { id } = req.params;
+  const { measuredAt, heightCm, weightKg, bodyFatPct, leanMassKg, restingHr, notes, source } = req.body;
+
+  const existing = await prisma.biometricSnapshot.findFirst({
+    where: { id, organizationId: org.id },
+  });
+  if (!existing) return res.status(404).json({ error: "Snapshot not found" });
+
+  const updated = await prisma.biometricSnapshot.update({
+    where: { id },
+    data: {
+      ...(measuredAt != null && { measuredAt: new Date(measuredAt) }),
+      ...(heightCm !== undefined && { heightCm: heightCm != null ? Number(heightCm) : null }),
+      ...(weightKg !== undefined && { weightKg: weightKg != null ? Number(weightKg) : null }),
+      ...(bodyFatPct !== undefined && { bodyFatPct: bodyFatPct != null ? Number(bodyFatPct) : null }),
+      ...(leanMassKg !== undefined && { leanMassKg: leanMassKg != null ? Number(leanMassKg) : null }),
+      ...(restingHr !== undefined && { restingHr: restingHr != null ? Number(restingHr) : null }),
+      ...(notes !== undefined && { notes }),
+      ...(source !== undefined && { source }),
+    },
+  });
+  return res.json(updated);
+});
+
+/** DELETE /v1/clients/:clientId/biometrics/:id — delete biometric snapshot */
+v1Router.delete("/clients/:clientId/biometrics/:id", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { id } = req.params;
+
+  const existing = await prisma.biometricSnapshot.findFirst({
+    where: { id, organizationId: org.id },
+  });
+  if (!existing) return res.status(404).json({ error: "Snapshot not found" });
+
+  await prisma.biometricSnapshot.delete({ where: { id } });
+  return res.json({ deleted: true });
+});
+
+/** GET /v1/clients/:clientId/biometrics/summary — biometric summary with trends */
+v1Router.get("/clients/:clientId/biometrics/summary", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const clientId = req.params.clientId!;
+  const snapshots = await prisma.biometricSnapshot.findMany({
+    where: { organizationId: org.id, clientId },
+    orderBy: { measuredAt: "asc" },
+  });
+
+  const { generateBiometricSummary, computeBMI, classifyBMI } = await import("@nutrition/nutrition-engine/biometrics-engine");
+  const dataPoints = snapshots.map((s) => ({
+    measuredAt: s.measuredAt,
+    heightCm: s.heightCm,
+    weightKg: s.weightKg,
+    bodyFatPct: s.bodyFatPct,
+    leanMassKg: s.leanMassKg,
+    restingHr: s.restingHr,
+    source: s.source,
+  }));
+
+  const summary = generateBiometricSummary(dataPoints);
+  const latest = summary.latestSnapshot;
+  const bmi = (latest?.heightCm && latest?.weightKg) ? computeBMI(latest.heightCm, latest.weightKg) : null;
+  const bmiCategory = bmi ? classifyBMI(bmi) : null;
+
+  return res.json({ ...summary, bmi, bmiCategory });
+});
+
+/** GET /v1/clients/:clientId/documents — list client documents */
+v1Router.get("/clients/:clientId/documents", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const clientId = req.params.clientId!;
+  const { type, status } = req.query;
+
+  const documents = await prisma.clientDocument.findMany({
+    where: {
+      organizationId: org.id,
+      clientId,
+      ...(type && { documentType: type as DocumentType }),
+      ...(status && { parsingStatus: status as ParsingStatus }),
+    },
+    include: { fileAttachment: true },
+    orderBy: { collectedAt: "desc" },
+  });
+  return res.json({ documents, count: documents.length });
+});
+
+/** POST /v1/clients/:clientId/documents — create document record (with optional file upload) */
+v1Router.post("/clients/:clientId/documents", upload.single("file"), async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const user = await getDefaultUser();
+  const clientId = req.params.clientId!;
+  const { documentType, collectedAt, sourceProvider, tags, notes } = req.body;
+
+  if (!documentType || !collectedAt) {
+    return res.status(400).json({ error: "documentType and collectedAt are required" });
+  }
+
+  let fileAttachmentId: string | null = null;
+
+  // Handle file upload if present
+  if (req.file) {
+    const { generateStorageKey, isAllowedMimeType, isFileSizeValid, createStorageAdapter } = await import("@nutrition/nutrition-engine/file-storage");
+
+    if (!isAllowedMimeType(req.file.mimetype)) {
+      return res.status(400).json({ error: `Unsupported file type: ${req.file.mimetype}` });
+    }
+    if (!isFileSizeValid(req.file.size)) {
+      return res.status(400).json({ error: "File too large (max 20 MB)" });
+    }
+
+    const storageKey = generateStorageKey(org.id, clientId, req.file.originalname);
+    const fileData = fs.readFileSync(req.file.path);
+    const adapter = createStorageAdapter();
+    const result = await adapter.upload(storageKey, fileData, req.file.mimetype);
+
+    // Clean up temp file
+    fs.unlinkSync(req.file.path);
+
+    const attachment = await prisma.fileAttachment.create({
+      data: {
+        organizationId: org.id,
+        storageProvider: result.storageProvider,
+        storageBucket: result.storageBucket,
+        storageKey: result.storageKey,
+        originalName: req.file.originalname,
+        mimeType: req.file.mimetype,
+        sizeBytes: result.sizeBytes,
+        checksum: result.checksum,
+        uploadedBy: user.id,
+      },
+    });
+    fileAttachmentId = attachment.id;
+  }
+
+  const parsedTags = typeof tags === "string" ? tags.split(",").map((t: string) => t.trim()).filter(Boolean) : Array.isArray(tags) ? tags : [];
+
+  const document = await prisma.clientDocument.create({
+    data: {
+      organizationId: org.id,
+      clientId,
+      fileAttachmentId,
+      documentType: documentType as DocumentType,
+      collectedAt: new Date(collectedAt),
+      sourceProvider: sourceProvider ?? null,
+      tags: parsedTags,
+      notes: notes ?? null,
+      createdBy: user.id,
+    },
+    include: { fileAttachment: true },
+  });
+  return res.status(201).json(document);
+});
+
+/** PATCH /v1/clients/:clientId/documents/:id — update document metadata */
+v1Router.patch("/clients/:clientId/documents/:id", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { id } = req.params;
+  const { documentType, collectedAt, sourceProvider, tags, notes, parsingStatus, verifiedBy } = req.body;
+
+  const existing = await prisma.clientDocument.findFirst({
+    where: { id, organizationId: org.id },
+  });
+  if (!existing) return res.status(404).json({ error: "Document not found" });
+
+  const updated = await prisma.clientDocument.update({
+    where: { id },
+    data: {
+      ...(documentType && { documentType: documentType as DocumentType }),
+      ...(collectedAt && { collectedAt: new Date(collectedAt) }),
+      ...(sourceProvider !== undefined && { sourceProvider }),
+      ...(tags && { tags: Array.isArray(tags) ? tags : (tags as string).split(",").map((t: string) => t.trim()) }),
+      ...(notes !== undefined && { notes }),
+      ...(parsingStatus && { parsingStatus: parsingStatus as ParsingStatus }),
+      ...(verifiedBy && { verifiedBy, verifiedAt: new Date() }),
+    },
+    include: { fileAttachment: true },
+  });
+  return res.json(updated);
+});
+
+/** POST /v1/clients/:clientId/documents/:id/verify — mark document as verified */
+v1Router.post("/clients/:clientId/documents/:id/verify", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const user = await getDefaultUser();
+  const { id } = req.params;
+
+  const existing = await prisma.clientDocument.findFirst({
+    where: { id, organizationId: org.id },
+  });
+  if (!existing) return res.status(404).json({ error: "Document not found" });
+
+  const updated = await prisma.clientDocument.update({
+    where: { id },
+    data: {
+      parsingStatus: "VERIFIED" as ParsingStatus,
+      verifiedBy: user.id,
+      verifiedAt: new Date(),
+    },
+  });
+  return res.json(updated);
+});
+
+/** GET /v1/clients/:clientId/metrics — list client metrics */
+v1Router.get("/clients/:clientId/metrics", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const clientId = req.params.clientId!;
+  const { key } = req.query;
+
+  const metrics = await prisma.metricSeries.findMany({
+    where: {
+      organizationId: org.id,
+      clientId,
+      ...(key && { metricKey: key as string }),
+    },
+    include: { sourceDocument: { select: { id: true, documentType: true, collectedAt: true } } },
+    orderBy: { observedAt: "desc" },
+  });
+  return res.json({ metrics, count: metrics.length });
+});
+
+/** POST /v1/clients/:clientId/metrics — create metric data point (manual entry) */
+v1Router.post("/clients/:clientId/metrics", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const user = await getDefaultUser();
+  const clientId = req.params.clientId!;
+  const { metricKey, value, unit, observedAt, sourceDocumentId, verification, notes } = req.body;
+
+  if (!metricKey || value == null || !unit || !observedAt) {
+    return res.status(400).json({ error: "metricKey, value, unit, and observedAt are required" });
+  }
+
+  const metric = await prisma.metricSeries.create({
+    data: {
+      organizationId: org.id,
+      clientId,
+      metricKey,
+      value: Number(value),
+      unit,
+      observedAt: new Date(observedAt),
+      sourceDocumentId: sourceDocumentId ?? null,
+      verification: (verification as MetricVerification) ?? "MANUAL_ENTRY",
+      notes: notes ?? null,
+      createdBy: user.id,
+    },
+  });
+  return res.status(201).json(metric);
+});
+
+/** GET /v1/clients/:clientId/metrics/status — metric quality report */
+v1Router.get("/clients/:clientId/metrics/status", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const clientId = req.params.clientId!;
+
+  const metrics = await prisma.metricSeries.findMany({
+    where: { organizationId: org.id, clientId },
+    orderBy: { observedAt: "asc" },
+  });
+
+  const { computeMetricStatuses, generateMetricQualityReport, groupMetricsByCategory } = await import("@nutrition/nutrition-engine/metrics-engine");
+  const dataPoints = metrics.map((m) => ({
+    metricKey: m.metricKey,
+    value: m.value,
+    unit: m.unit,
+    observedAt: m.observedAt,
+    verification: m.verification as "UNVERIFIED" | "MANUAL_ENTRY" | "PARSED_AUTO" | "CLINICIAN_VERIFIED",
+    sourceDocumentId: m.sourceDocumentId,
+    confidenceScore: m.confidenceScore,
+  }));
+
+  const statuses = computeMetricStatuses(dataPoints);
+  const qualityReport = generateMetricQualityReport(dataPoints);
+  const grouped = groupMetricsByCategory(statuses);
+
+  return res.json({ statuses, qualityReport, grouped });
+});
+
+/** GET /v1/clients/:clientId/health-summary — combined biometrics + metrics overview */
+v1Router.get("/clients/:clientId/health-summary", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const clientId = req.params.clientId!;
+
+  const [biometrics, metricRows, documents] = await Promise.all([
+    prisma.biometricSnapshot.findMany({
+      where: { organizationId: org.id, clientId },
+      orderBy: { measuredAt: "asc" },
+    }),
+    prisma.metricSeries.findMany({
+      where: { organizationId: org.id, clientId },
+      orderBy: { observedAt: "asc" },
+    }),
+    prisma.clientDocument.findMany({
+      where: { organizationId: org.id, clientId },
+      select: { id: true, documentType: true, parsingStatus: true, verifiedAt: true },
+    }),
+  ]);
+
+  const { generateBiometricSummary, computeBMI, classifyBMI } = await import("@nutrition/nutrition-engine/biometrics-engine");
+  const { generateMetricQualityReport } = await import("@nutrition/nutrition-engine/metrics-engine");
+
+  const bioDataPoints = biometrics.map((s) => ({
+    measuredAt: s.measuredAt,
+    heightCm: s.heightCm,
+    weightKg: s.weightKg,
+    bodyFatPct: s.bodyFatPct,
+    leanMassKg: s.leanMassKg,
+    restingHr: s.restingHr,
+    source: s.source,
+  }));
+  const bioSummary = generateBiometricSummary(bioDataPoints);
+  const latest = bioSummary.latestSnapshot;
+  const bmi = (latest?.heightCm && latest?.weightKg) ? computeBMI(latest.heightCm, latest.weightKg) : null;
+
+  const metricDataPoints = metricRows.map((m) => ({
+    metricKey: m.metricKey,
+    value: m.value,
+    unit: m.unit,
+    observedAt: m.observedAt,
+    verification: m.verification as "UNVERIFIED" | "MANUAL_ENTRY" | "PARSED_AUTO" | "CLINICIAN_VERIFIED",
+    sourceDocumentId: m.sourceDocumentId,
+    confidenceScore: m.confidenceScore,
+  }));
+  const metricReport = generateMetricQualityReport(metricDataPoints);
+
+  const unverifiedDocs = documents.filter((d) => d.parsingStatus !== "VERIFIED").length;
+  const failedParsing = documents.filter((d) => d.parsingStatus === "FAILED").length;
+
+  const warnings: string[] = [
+    ...bioSummary.dataQuality.warnings,
+    ...metricReport.warnings,
+  ];
+  if (unverifiedDocs > 0) warnings.push(`${unverifiedDocs} document(s) not yet verified`);
+  if (failedParsing > 0) warnings.push(`${failedParsing} document(s) failed parsing`);
+
+  return res.json({
+    biometrics: { ...bioSummary, bmi, bmiCategory: bmi ? classifyBMI(bmi) : null },
+    metrics: metricReport,
+    documents: { total: documents.length, unverified: unverifiedDocs, failedParsing },
+    warnings,
+  });
+});
+
+// ── Sprint 5: Audit Trace, Reproducibility, Ops Control Tower ───────
+
+/** GET /v1/audit/meal/:scheduleId — full audit trace for a served meal */
+v1Router.get("/audit/meal/:scheduleId", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const scheduleId = req.params.scheduleId!;
+
+  const schedule = await prisma.mealSchedule.findFirst({
+    where: { id: scheduleId, organizationId: org.id },
+    include: { client: true, sku: true },
+  });
+  if (!schedule) return res.status(404).json({ error: "Schedule not found" });
+
+  const serviceEvent = await prisma.mealServiceEvent.findUnique({
+    where: { mealScheduleId: scheduleId },
+  });
+  if (!serviceEvent?.finalLabelSnapshotId) {
+    return res.status(404).json({ error: "No label snapshot found for this meal (not yet served/frozen)" });
+  }
+
+  const labelSnapshot = await prisma.labelSnapshot.findUnique({
+    where: { id: serviceEvent.finalLabelSnapshotId },
+  });
+  if (!labelSnapshot) return res.status(404).json({ error: "Label snapshot not found" });
+
+  const { buildLineageTree } = await import("../lib/label-freeze.js");
+  const tree = await buildLineageTree(labelSnapshot.id);
+
+  const { buildMealAuditTrace } = await import("@nutrition/nutrition-engine/audit-trace");
+  const payload = labelSnapshot.renderPayload as Record<string, unknown>;
+
+  const trace = buildMealAuditTrace(
+    {
+      id: schedule.id,
+      clientName: schedule.client.fullName,
+      serviceDate: schedule.serviceDate.toISOString(),
+      mealSlot: schedule.mealSlot,
+      servings: schedule.plannedServings,
+    },
+    payload as any,
+    tree as any,
+  );
+
+  return res.json({ trace, labelSnapshot: { id: labelSnapshot.id, frozenAt: labelSnapshot.frozenAt } });
+});
+
+/** GET /v1/audit/label/:labelId — label snapshot provenance with lineage tree */
+v1Router.get("/audit/label/:labelId", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const labelId = req.params.labelId!;
+
+  const label = await prisma.labelSnapshot.findFirst({
+    where: { id: labelId, organizationId: org.id },
+  });
+  if (!label) return res.status(404).json({ error: "Label not found" });
+
+  const { buildLineageTree } = await import("../lib/label-freeze.js");
+  const tree = await buildLineageTree(labelId);
+
+  const { extractNutrientProvenance, generateQaWarnings } = await import("@nutrition/nutrition-engine/audit-trace");
+  const payload = label.renderPayload as Record<string, unknown>;
+  const provenance = extractNutrientProvenance(payload as any);
+  const qaWarnings = generateQaWarnings(payload as any, tree as any);
+
+  return res.json({
+    label: { id: label.id, type: label.labelType, title: label.title, frozenAt: label.frozenAt },
+    payload,
+    lineageTree: tree,
+    provenance,
+    qaWarnings,
+  });
+});
+
+/** GET /v1/debug/recompute-diff/:labelId — non-destructive recompute diff */
+v1Router.get("/debug/recompute-diff/:labelId", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const labelId = req.params.labelId!;
+
+  const label = await prisma.labelSnapshot.findFirst({
+    where: { id: labelId, organizationId: org.id, labelType: "SKU" },
+  });
+  if (!label) return res.status(404).json({ error: "SKU label snapshot not found" });
+
+  const payload = label.renderPayload as Record<string, unknown>;
+  const { runIntegrityChecks, buildRecomputeDiff } = await import("@nutrition/nutrition-engine/reproducibility");
+
+  // Build snapshot data from payload
+  const snapshotData = {
+    labelId: label.id,
+    frozenAt: label.frozenAt?.toISOString() ?? "",
+    skuName: (payload.skuName as string) ?? "",
+    recipeName: (payload.recipeName as string) ?? "",
+    servings: (payload.servings as number) ?? 1,
+    servingWeightG: (payload.servingWeightG as number) ?? 0,
+    perServing: (payload.perServing as Record<string, number>) ?? {},
+    provisional: Boolean(payload.provisional),
+    reasonCodes: (payload.reasonCodes as string[]) ?? [],
+    evidenceSummary: {
+      verifiedCount: (payload.evidenceSummary as any)?.verifiedCount ?? 0,
+      inferredCount: (payload.evidenceSummary as any)?.inferredCount ?? 0,
+      exceptionCount: (payload.evidenceSummary as any)?.exceptionCount ?? 0,
+      totalNutrientRows: (payload.evidenceSummary as any)?.totalNutrientRows ?? 0,
+      sourceRefs: (payload.evidenceSummary as any)?.sourceRefs ?? [],
+      gradeBreakdown: (payload.evidenceSummary as any)?.gradeBreakdown ?? {},
+    },
+  };
+
+  // For MVP, we return integrity checks + diff against itself (demonstrating the tool works).
+  // Full recompute would re-run label-freeze logic without mutation.
+  const integrityChecks = runIntegrityChecks(snapshotData);
+  const diff = buildRecomputeDiff(snapshotData, {
+    perServing: snapshotData.perServing,
+    servingWeightG: snapshotData.servingWeightG,
+    provisional: snapshotData.provisional,
+    reasonCodes: snapshotData.reasonCodes,
+    evidenceSummary: snapshotData.evidenceSummary,
+  });
+
+  return res.json({ diff, integrityChecks });
+});
+
+/** GET /v1/control-tower — aggregated ops dashboard data */
+v1Router.get("/control-tower", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const expiryHorizon = new Date(today);
+  expiryHorizon.setDate(expiryHorizon.getDate() + 3);
+
+  const thirtyDaysAgo = new Date(today);
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  const [
+    mealsDueToday, mealsServedToday,
+    batchesDue, batchesActive, batchesBlocked,
+    expiringLots,
+    openVerificationTasks, criticalVerificationTasks,
+    pendingSubstitutions, pendingCalibrationReviews, openQcIssues,
+    failedImports,
+    unverifiedDocClients, failedParsingDocs,
+  ] = await Promise.all([
+    prisma.mealSchedule.count({ where: { organizationId: org.id, serviceDate: { gte: today, lt: tomorrow }, status: "PLANNED" } }),
+    prisma.mealServiceEvent.count({ where: { organizationId: org.id, servedAt: { gte: today, lt: tomorrow } } }),
+    prisma.batchProduction.count({ where: { organizationId: org.id, plannedDate: { gte: today, lt: tomorrow }, status: "PLANNED" } }),
+    prisma.batchProduction.count({ where: { organizationId: org.id, status: { in: ["IN_PREP", "COOKING", "CHILLING"] } } }),
+    prisma.batchProduction.count({ where: { organizationId: org.id, status: "PLANNED", plannedDate: { lt: today } } }),
+    prisma.inventoryLot.findMany({
+      where: { organizationId: org.id, quantityAvailableG: { gt: 0 }, expiresAt: { lte: expiryHorizon, gte: today } },
+      include: { product: { select: { name: true } } },
+      take: 20,
+    }),
+    prisma.verificationTask.count({ where: { organizationId: org.id, status: "OPEN" } }),
+    prisma.verificationTask.count({ where: { organizationId: org.id, status: "OPEN", severity: { in: ["CRITICAL", "HIGH"] } } }),
+    prisma.substitutionRecord.count({ where: { organizationId: org.id, status: "PROPOSED" } }),
+    prisma.yieldCalibration.count({ where: { organizationId: org.id, status: "PENDING_REVIEW" } }),
+    prisma.qcIssue.count({ where: { organizationId: org.id, resolvedAt: null } }),
+    prisma.importJob.count({ where: { organizationId: org.id, status: "FAILED" } }),
+    prisma.clientDocument.groupBy({ by: ["clientId"], where: { organizationId: org.id, parsingStatus: { not: "VERIFIED" } }, _count: true }),
+    prisma.clientDocument.count({ where: { organizationId: org.id, parsingStatus: "FAILED" } }),
+  ]);
+
+  // Stale biometrics: clients whose latest biometric is >30 days old
+  const clients = await prisma.client.findMany({ where: { organizationId: org.id, active: true }, select: { id: true } });
+  let staleBioCount = 0;
+  for (const client of clients) {
+    const latest = await prisma.biometricSnapshot.findFirst({
+      where: { organizationId: org.id, clientId: client.id },
+      orderBy: { measuredAt: "desc" },
+      select: { measuredAt: true },
+    });
+    if (!latest || latest.measuredAt < thirtyDaysAgo) staleBioCount++;
+  }
+
+  // Stuck batches (active for >24h)
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const stuckBatches = await prisma.batchProduction.count({
+    where: { organizationId: org.id, status: { in: ["IN_PREP", "COOKING", "CHILLING"] }, updatedAt: { lt: oneDayAgo } },
+  });
+
+  // Shortage detection: ingredients below par level
+  const shortages = await prisma.ingredientCatalog.findMany({
+    where: { organizationId: org.id, active: true, parLevelG: { not: null } },
+    select: { id: true, parLevelG: true },
+  });
+  let shortageCount = 0;
+  for (const ing of shortages) {
+    if (!ing.parLevelG) continue;
+    const totalAvailable = await prisma.inventoryLot.aggregate({
+      where: { organizationId: org.id, product: { ingredientId: ing.id }, quantityAvailableG: { gt: 0 } },
+      _sum: { quantityAvailableG: true },
+    });
+    if ((totalAvailable._sum.quantityAvailableG ?? 0) < ing.parLevelG) {
+      shortageCount++;
+    }
+  }
+
+  const { buildControlTowerSummary } = await import("@nutrition/nutrition-engine/ops-control-tower");
+
+  const summary = buildControlTowerSummary({
+    today: {
+      mealsDueToday,
+      mealsServedToday,
+      batchesDue,
+      batchesActive,
+      batchesBlocked,
+      shortageCount,
+      expiringLots: expiringLots.map((l) => ({
+        lotId: l.id,
+        productName: l.product.name,
+        expiresAt: l.expiresAt?.toISOString() ?? "",
+        quantityG: l.quantityAvailableG,
+      })),
+    },
+    scientificQa: {
+      openVerificationTasks,
+      criticalVerificationTasks,
+      estimatedNutrientRows: 0, // would require a separate aggregation query
+      inferredNutrientRows: 0,
+      missingProvenanceCount: 0,
+      pendingSubstitutions,
+      pendingCalibrationReviews,
+      openQcIssues,
+    },
+    clientData: {
+      clientsWithStaleBiometrics: staleBioCount,
+      clientsWithUnverifiedDocs: unverifiedDocClients.length,
+      failedParsingDocs,
+      staleMetricClients: 0, // simplified for MVP
+    },
+    reliability: {
+      failedImports,
+      stuckBatches,
+      stuckMappings: 0,
+    },
+  });
+
+  return res.json(summary);
 });
