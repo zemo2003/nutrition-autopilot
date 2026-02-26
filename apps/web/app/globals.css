@@ -52,6 +52,8 @@
   --weight-semibold: 600;
   --weight-bold:   700;
 
+  --bottom-tabs-height: 60px;
+
   --sp-1:  4px;  --sp-2:  8px;  --sp-3:  12px;
   --sp-4:  16px; --sp-5:  20px; --sp-6:  24px;
   --sp-8:  32px; --sp-10: 40px; --sp-12: 48px;
@@ -235,49 +237,48 @@ h1, h2, h3, h4 {
 
 .status-text { font-size: var(--text-xs); color: var(--c-ink-muted); white-space: nowrap; }
 
-/* Mobile menu toggle */
-.mobile-menu-btn {
-  display: none;
-  background: transparent;
-  color: var(--c-ink-soft);
-  padding: var(--sp-2);
-  border-radius: var(--r-sm);
-  font-size: var(--text-lg);
-  line-height: 1;
-}
-
-.mobile-menu {
+/* ── Bottom Tab Bar (mobile) ────────────────────────── */
+.bottom-tabs {
   display: none;
   position: fixed;
-  top: var(--nav-height);
-  left: 0; right: 0;
-  background: var(--c-surface);
-  border-bottom: 1px solid var(--c-border);
-  padding: var(--sp-3) var(--page-gutter);
-  box-shadow: var(--shadow-lg);
-  z-index: 99;
-  animation: slideDown var(--dur-normal) var(--ease-out);
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  height: var(--bottom-tabs-height);
+  background: rgba(10,10,11,0.92);
+  backdrop-filter: blur(16px) saturate(1.6);
+  -webkit-backdrop-filter: blur(16px) saturate(1.6);
+  border-top: 1px solid var(--c-border);
+  flex-direction: row;
+  align-items: stretch;
+  justify-content: space-around;
 }
 
-.mobile-menu.open { display: flex; flex-direction: column; gap: var(--sp-1); }
-
-@keyframes slideDown {
-  from { opacity: 0; transform: translateY(-8px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-.mobile-menu a {
-  display: block;
-  padding: var(--sp-3);
-  border-radius: var(--r-md);
+.bottom-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  flex: 1;
+  min-height: 48px;
+  padding: var(--sp-1) 0;
   text-decoration: none;
-  font-size: var(--text-base);
+  color: var(--c-ink-muted);
+  font-size: 10px;
   font-weight: var(--weight-medium);
-  color: var(--c-ink-soft);
+  letter-spacing: 0.02em;
+  transition: color var(--dur-fast) var(--ease-out);
+  -webkit-tap-highlight-color: transparent;
 }
 
-.mobile-menu a:hover { background: var(--c-surface-alt); color: var(--c-ink); }
-.mobile-menu a[data-active="true"] { background: var(--c-primary-soft); color: var(--c-primary); }
+.bottom-tab svg { width: 22px; height: 22px; stroke-width: 1.6; }
+
+.bottom-tab:active { transform: scale(0.92); }
+
+.bottom-tab[data-active="true"] { color: var(--c-primary); }
+[data-mode="science"] .bottom-tab[data-active="true"] { color: var(--c-info); }
 
 /* ── Cards ──────────────────────────────────────────── */
 .card {
@@ -941,7 +942,9 @@ pre {
   .page-title { font-size: var(--text-xl); }
   .kpi-grid { grid-template-columns: repeat(2, 1fr); }
   .topnav-links { display: none; }
-  .mobile-menu-btn { display: flex; min-height: 44px; min-width: 44px; align-items: center; justify-content: center; }
+  .topnav-import { display: none; }
+  .bottom-tabs { display: flex; }
+  .page-shell { padding-bottom: calc(var(--bottom-tabs-height) + var(--sp-4)); }
   .qa-block { flex-direction: column; }
   .grid-two { grid-template-columns: 1fr; }
   .calendar-header-stats { flex-wrap: wrap; }
@@ -990,11 +993,12 @@ pre {
     padding-top: env(safe-area-inset-top);
     height: calc(var(--nav-height) + env(safe-area-inset-top));
   }
-  .mobile-menu {
-    top: calc(var(--nav-height) + env(safe-area-inset-top));
+  .bottom-tabs {
+    padding-bottom: env(safe-area-inset-bottom);
+    height: calc(var(--bottom-tabs-height) + env(safe-area-inset-bottom));
   }
   .page-shell {
-    padding-bottom: calc(var(--sp-16) + env(safe-area-inset-bottom));
+    padding-bottom: calc(var(--bottom-tabs-height) + env(safe-area-inset-bottom) + var(--sp-4));
   }
   .topnav-inner {
     padding-left: max(var(--page-gutter), env(safe-area-inset-left));
@@ -1382,7 +1386,7 @@ pre {
 /* ── Print Media ────────────────────────────────────── */
 @media print {
   body { background: #fff; color: #000; font-size: 12px; }
-  .topnav, .page-header-actions, .no-print, .breadcrumbs, .mobile-menu { display: none !important; }
+  .topnav, .page-header-actions, .no-print, .breadcrumbs, .bottom-tabs { display: none !important; }
   .page-shell { max-width: none; padding: 0; animation: none; }
   .print-label { border: 2px solid #000; box-shadow: none; page-break-inside: avoid; }
 

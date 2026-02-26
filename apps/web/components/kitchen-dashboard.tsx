@@ -1,6 +1,29 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState, useCallback } from "react";
+
+function resolveApiBase() {
+  if (process.env.NEXT_PUBLIC_API_BASE) return process.env.NEXT_PUBLIC_API_BASE;
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host.includes("onrender.com")) {
+      return `${window.location.protocol}//${host.replace("-web", "-api")}`;
+    }
+    return `${window.location.protocol}//${host}:4000`;
+  }
+  return "http://localhost:4000";
+}
+
+type ScheduleItem = {
+  id: string;
+  clientName: string;
+  skuName: string | null;
+  serviceDate: string;
+  mealSlot: string;
+  status: string;
+  plannedServings: number;
+};
 
 type Props = {
   counts: {
@@ -16,12 +39,78 @@ type Props = {
   sauceCount: number;
 };
 
+const SLOT_ORDER: Record<string, number> = {
+  BREAKFAST: 0, LUNCH: 1, PRE_TRAINING: 2, POST_TRAINING: 3,
+  SNACK: 4, DINNER: 5, PRE_BED: 6,
+};
+
+function slotClass(slot: string) {
+  const s = slot.toLowerCase();
+  if (s === "breakfast") return "meal-slot-breakfast";
+  if (s === "lunch") return "meal-slot-lunch";
+  if (s === "dinner") return "meal-slot-dinner";
+  return "meal-slot-snack";
+}
+
+function slotLabel(slot: string) {
+  return slot.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export function KitchenDashboard({ counts, clients, sauceCount }: Props) {
   const today = new Date().toLocaleDateString("en-US", {
     weekday: "long",
     month: "long",
     day: "numeric",
   });
+
+  const todayISO = new Date().toISOString().slice(0, 10);
+
+  const [meals, setMeals] = useState<ScheduleItem[]>([]);
+  const [mealsLoading, setMealsLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${resolveApiBase()}/v1/schedules?status=PLANNED`, { cache: "no-store" });
+        if (!res.ok) throw new Error("Failed to fetch schedules");
+        const json = await res.json() as { schedules?: ScheduleItem[] };
+        if (cancelled) return;
+        const todayMeals = (json.schedules ?? [])
+          .filter((s) => s.serviceDate === todayISO)
+          .sort((a, b) => (SLOT_ORDER[a.mealSlot] ?? 99) - (SLOT_ORDER[b.mealSlot] ?? 99));
+        setMeals(todayMeals);
+      } catch {
+        // silently fail — KPIs still show from server data
+      } finally {
+        if (!cancelled) setMealsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [todayISO]);
+
+  const handleFed = useCallback(async (scheduleId: string) => {
+    setActionLoading((prev) => ({ ...prev, [scheduleId]: "DONE" }));
+    setErrors((prev) => { const n = { ...prev }; delete n[scheduleId]; return n; });
+    try {
+      const res = await fetch(`${resolveApiBase()}/v1/schedule/${scheduleId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "DONE" }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: "Request failed" }));
+        throw new Error(body.error || "Request failed");
+      }
+      setMeals((prev) => prev.filter((s) => s.id !== scheduleId));
+    } catch (err: any) {
+      setErrors((prev) => ({ ...prev, [scheduleId]: err?.message || "Failed" }));
+    } finally {
+      setActionLoading((prev) => { const n = { ...prev }; delete n[scheduleId]; return n; });
+    }
+  }, []);
 
   return (
     <div className="page-shell">
@@ -41,6 +130,47 @@ export function KitchenDashboard({ counts, clients, sauceCount }: Props) {
           )}
         </div>
       </div>
+
+      {/* Today's Meals */}
+      <section className="section">
+        <h2 className="section-title">Today&apos;s Meals</h2>
+        {mealsLoading ? (
+          <div className="loading-shimmer loading-block" style={{ height: 80 }} />
+        ) : meals.length === 0 ? (
+          <p style={{ color: "var(--c-ink-muted)", fontSize: "var(--text-sm)" }}>
+            All caught up &mdash; no meals left for today.
+          </p>
+        ) : (
+          meals.map((meal) => (
+            <div key={meal.id} className="meal-card">
+              <div className="meal-info">
+                <div className="meal-name">{meal.skuName ?? "Untitled"}</div>
+                <div className="meal-time">
+                  <span className={`meal-slot ${slotClass(meal.mealSlot)}`}>
+                    {slotLabel(meal.mealSlot)}
+                  </span>
+                  {" "}
+                  <span>{meal.clientName}</span>
+                </div>
+              </div>
+              <div className="meal-actions">
+                <button
+                  className="btn btn-primary btn-sm"
+                  disabled={!!actionLoading[meal.id]}
+                  onClick={() => handleFed(meal.id)}
+                >
+                  {actionLoading[meal.id] === "DONE" ? "Saving\u2026" : "Fed"}
+                </button>
+              </div>
+              {errors[meal.id] && (
+                <div className="alert error" style={{ marginTop: "var(--sp-2)", fontSize: "var(--text-xs)" }}>
+                  {errors[meal.id]}
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </section>
 
       {/* Quick actions */}
       <section className="section">
