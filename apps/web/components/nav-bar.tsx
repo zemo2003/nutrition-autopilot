@@ -27,8 +27,8 @@ const KITCHEN_NAV = [
 ] as const;
 
 const SCIENCE_NAV = [
-  { href: "/", label: "Data Quality" },
-  { href: "/clients-health", label: "Clients" },
+  { href: "/", label: "Dashboard" },
+  { href: "/clients-health", label: "Profile & Data" },
   { href: "/audit-labels", label: "Audit" },
   { href: "/ops", label: "Ops Tower" },
 ] as const;

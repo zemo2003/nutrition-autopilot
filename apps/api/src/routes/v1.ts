@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { execFile as execFileCb } from "node:child_process";
 import express from "express";
 import multer from "multer";
-import { addHours, endOfMonth, parse, startOfMonth } from "date-fns";
+import { addHours, endOfMonth, parse, startOfMonth, subDays, startOfDay, endOfDay, format } from "date-fns";
 import { prisma, NutrientSourceType, VerificationStatus, VerificationTaskStatus, VerificationTaskSeverity, ScheduleStatus, BatchStatus, ComponentType, StorageLocation, SauceVariantType, BatchCheckpointType, MappingResolutionSource, SubstitutionStatus, CalibrationStatus, QcIssueType, MealSource, PrepDraftStatus, DocumentType, ParsingStatus, MetricVerification } from "@nutrition/db";
 import { parseInstacartOrders, parsePilotMeals, parseSotWorkbook, mapOrderLineToIngredient } from "@nutrition/importers";
 import { getDefaultUser, getPrimaryOrganization } from "../lib/context.js";
@@ -1223,6 +1223,109 @@ v1Router.get("/clients/:clientId/calendar", async (req, res) => {
       sku: e.sku ? { id: e.sku.id, code: e.sku.code, name: e.sku.name } : null,
       finalLabelSnapshotId: e.finalLabelSnapshotId
     }))
+  });
+});
+
+v1Router.get("/clients/:clientId/nutrition/weekly", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const clientId = req.params.clientId!;
+  const dateStr = String(req.query.date || new Date().toISOString().slice(0, 10));
+  const anchorDate = parse(dateStr, "yyyy-MM-dd", new Date());
+  const weekStart = startOfDay(subDays(anchorDate, 6));
+  const weekEnd = endOfDay(anchorDate);
+
+  const events = await prisma.mealServiceEvent.findMany({
+    where: {
+      organizationId: org.id,
+      clientId,
+      servedAt: { gte: weekStart, lte: weekEnd }
+    },
+    include: {
+      sku: true,
+      mealSchedule: true,
+      finalLabelSnapshot: true
+    },
+    orderBy: { servedAt: "asc" }
+  });
+
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const dayMap = new Map<string, { date: string; dayOfWeek: string; mealCount: number; totalKcal: number; proteinG: number; carbG: number; fatG: number; fiberG: number; meals: { id: string; servedAt: Date; mealSlot: string; skuName: string; kcal: number; proteinG: number; carbG: number; fatG: number; fiberG: number }[] }>();
+
+  // Initialize 7 days with zeroes
+  for (let i = 6; i >= 0; i--) {
+    const d = subDays(anchorDate, i);
+    const key = format(d, "yyyy-MM-dd");
+    dayMap.set(key, {
+      date: key,
+      dayOfWeek: dayNames[d.getDay()]!,
+      mealCount: 0,
+      totalKcal: 0,
+      proteinG: 0,
+      carbG: 0,
+      fatG: 0,
+      fiberG: 0,
+      meals: []
+    });
+  }
+
+  for (const e of events) {
+    const key = format(e.servedAt, "yyyy-MM-dd");
+    const day = dayMap.get(key);
+    if (!day) continue;
+
+    const label = e.finalLabelSnapshot?.renderPayload as Record<string, unknown> | null;
+    const fda = (label?.roundedFda ?? {}) as Record<string, number>;
+    const kcal = fda.calories ?? 0;
+    const prot = fda.proteinG ?? 0;
+    const carb = fda.carbG ?? 0;
+    const fat = fda.fatG ?? 0;
+    const fiber = fda.fiberG ?? 0;
+
+    day.mealCount += 1;
+    day.totalKcal += kcal;
+    day.proteinG += prot;
+    day.carbG += carb;
+    day.fatG += fat;
+    day.fiberG += fiber;
+    day.meals.push({
+      id: e.id,
+      servedAt: e.servedAt,
+      mealSlot: e.mealSchedule.mealSlot,
+      skuName: e.sku?.name ?? e.mealSchedule.notes ?? "Meal",
+      kcal,
+      proteinG: prot,
+      carbG: carb,
+      fatG: fat,
+      fiberG: fiber
+    });
+  }
+
+  const days = Array.from(dayMap.values());
+  const daysWithData = days.filter((d) => d.mealCount > 0);
+  const totalMeals = days.reduce((s, d) => s + d.mealCount, 0);
+  const totalKcal = days.reduce((s, d) => s + d.totalKcal, 0);
+  const totalProtein = days.reduce((s, d) => s + d.proteinG, 0);
+  const totalCarb = days.reduce((s, d) => s + d.carbG, 0);
+  const totalFat = days.reduce((s, d) => s + d.fatG, 0);
+  const n = daysWithData.length || 1;
+
+  return res.json({
+    clientId,
+    weekStart: format(weekStart, "yyyy-MM-dd"),
+    weekEnd: format(anchorDate, "yyyy-MM-dd"),
+    days,
+    summary: {
+      totalMeals,
+      daysWithData: daysWithData.length,
+      avgKcal: Math.round(totalKcal / n),
+      avgProteinG: Math.round(totalProtein / n),
+      avgCarbG: Math.round(totalCarb / n),
+      avgFatG: Math.round(totalFat / n),
+      totalKcal,
+      totalProteinG: Math.round(totalProtein),
+      totalCarbG: Math.round(totalCarb),
+      totalFatG: Math.round(totalFat)
+    }
   });
 });
 

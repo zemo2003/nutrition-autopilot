@@ -1402,3 +1402,312 @@ pre {
     text-shadow: none !important;
   }
 }
+
+/* ══════════════════════════════════════════════════════
+   Science Dashboard — Profile, Macros, Biomarkers
+   ══════════════════════════════════════════════════════ */
+
+/* Profile Hero */
+.science-profile-hero {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-5);
+  background: var(--c-surface);
+  border: 1px solid rgba(96, 165, 250, 0.25);
+  border-radius: var(--r-lg);
+  margin-bottom: var(--sp-6);
+}
+
+.science-profile-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(96, 165, 250, 0.15);
+  color: var(--c-info);
+  display: grid;
+  place-items: center;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
+  flex-shrink: 0;
+}
+
+.science-profile-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.science-profile-name {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--c-ink);
+}
+
+.science-profile-kpis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+
+.science-profile-kpi {
+  font-size: var(--text-sm);
+  color: var(--c-ink-soft);
+}
+
+.science-profile-kpi strong {
+  color: var(--c-ink);
+  font-weight: var(--weight-semibold);
+}
+
+.science-profile-edit {
+  font-size: var(--text-sm);
+  color: var(--c-info);
+  text-decoration: none;
+  flex-shrink: 0;
+}
+.science-profile-edit:hover { text-decoration: underline; }
+
+/* 7-Day Macro Week Grid */
+.macro-week-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+.macro-day-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.macro-day-card--today {
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 1px var(--c-primary);
+}
+
+.macro-day-card--empty {
+  border-style: dashed;
+  opacity: 0.5;
+}
+
+.macro-day-label {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--c-ink-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.macro-day-date {
+  font-size: var(--text-xs);
+  color: var(--c-ink-muted);
+}
+
+.macro-day-kcal {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
+  color: var(--c-ink);
+  line-height: var(--leading-tight);
+  margin: var(--sp-1) 0;
+}
+
+.macro-day-kcal-unit {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-normal);
+  color: var(--c-ink-muted);
+}
+
+/* Stacked macro bar */
+.macro-bar {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--c-surface-alt);
+  margin: var(--sp-1) 0;
+}
+.macro-bar-protein { background: #34d399; }
+.macro-bar-carb    { background: #60a5fa; }
+.macro-bar-fat     { background: #f59e0b; }
+
+.macro-day-breakdown {
+  font-size: var(--text-xs);
+  color: var(--c-ink-muted);
+  line-height: 1.4;
+}
+
+.macro-day-meals {
+  font-size: var(--text-xs);
+  color: var(--c-ink-muted);
+  margin-top: auto;
+  padding-top: var(--sp-1);
+}
+
+/* Macro week summary row */
+.macro-week-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--c-surface-alt);
+  border-radius: var(--r-md);
+  margin-bottom: var(--sp-3);
+}
+
+.macro-week-summary-item {
+  font-size: var(--text-sm);
+  color: var(--c-ink-soft);
+}
+.macro-week-summary-item strong {
+  color: var(--c-ink);
+  font-weight: var(--weight-semibold);
+}
+
+/* Macro legend */
+.macro-legend {
+  display: flex;
+  gap: var(--sp-4);
+  font-size: var(--text-xs);
+  color: var(--c-ink-muted);
+  margin-bottom: var(--sp-4);
+}
+
+.macro-legend-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: var(--sp-1);
+  vertical-align: middle;
+}
+
+/* Biomarker grid */
+.biomarker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: var(--sp-2);
+}
+
+.biomarker-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+}
+
+.biomarker-card-label {
+  font-size: var(--text-xs);
+  color: var(--c-ink-muted);
+  margin-bottom: var(--sp-1);
+}
+
+.biomarker-card-value {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--c-ink);
+}
+
+.biomarker-card-unit {
+  font-size: var(--text-xs);
+  color: var(--c-ink-muted);
+  margin-left: 2px;
+}
+
+.biomarker-card-stale {
+  font-size: var(--text-xs);
+  color: var(--c-ink-muted);
+  margin-top: var(--sp-1);
+}
+
+.biomarker-status {
+  display: inline-block;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+}
+.biomarker-status--normal   { background: var(--c-success-soft); color: var(--c-success); }
+.biomarker-status--warning  { background: var(--c-warn-soft);    color: var(--c-warn); }
+.biomarker-status--critical { background: var(--c-danger-soft);  color: var(--c-danger); }
+
+/* Research links */
+.research-links {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--sp-2);
+}
+
+.research-link-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+  text-decoration: none;
+  color: var(--c-ink);
+  transition: border-color 0.15s;
+}
+.research-link-card:hover {
+  border-color: var(--c-info);
+}
+
+.research-link-card-title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  margin-bottom: var(--sp-1);
+}
+
+.research-link-card-meta {
+  font-size: var(--text-xs);
+  color: var(--c-ink-muted);
+}
+
+/* Collapsible section */
+.science-collapsible-toggle {
+  background: none;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--c-ink-soft);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  margin-top: var(--sp-4);
+}
+.science-collapsible-toggle:hover {
+  border-color: var(--c-ink-muted);
+  color: var(--c-ink);
+}
+
+/* ── Science Dashboard Responsive ──────────────────── */
+@media (max-width: 768px) {
+  .macro-week-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  .science-profile-hero {
+    flex-direction: column;
+    text-align: center;
+  }
+  .science-profile-kpis {
+    justify-content: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .macro-week-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .biomarker-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .research-links {
+    grid-template-columns: 1fr 1fr;
+  }
+}
