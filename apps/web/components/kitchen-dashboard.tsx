@@ -65,23 +65,25 @@ export function KitchenDashboard({ counts, clients, sauceCount }: Props) {
 
   const todayISO = new Date().toISOString().slice(0, 10);
 
-  const [meals, setMeals] = useState<ScheduleItem[]>([]);
+  const [pending, setPending] = useState<ScheduleItem[]>([]);
+  const [served, setServed] = useState<ScheduleItem[]>([]);
   const [mealsLoading, setMealsLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [servedOpen, setServedOpen] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`${resolveApiBase()}/v1/schedules?status=PLANNED`, { cache: "no-store" });
+        const res = await fetch(`${resolveApiBase()}/v1/schedules?from=${todayISO}&to=${todayISO}`, { cache: "no-store" });
         if (!res.ok) throw new Error("Failed to fetch schedules");
         const json = await res.json() as { schedules?: ScheduleItem[] };
         if (cancelled) return;
         const todayMeals = (json.schedules ?? [])
-          .filter((s) => s.serviceDate === todayISO)
           .sort((a, b) => (SLOT_ORDER[a.mealSlot] ?? 99) - (SLOT_ORDER[b.mealSlot] ?? 99));
-        setMeals(todayMeals);
+        setPending(todayMeals.filter((s) => s.status === "PLANNED"));
+        setServed(todayMeals.filter((s) => s.status === "DONE"));
       } catch {
         // silently fail — KPIs still show from server data
       } finally {
@@ -104,7 +106,11 @@ export function KitchenDashboard({ counts, clients, sauceCount }: Props) {
         const body = await res.json().catch(() => ({ error: "Request failed" }));
         throw new Error(body.error || "Request failed");
       }
-      setMeals((prev) => prev.filter((s) => s.id !== scheduleId));
+      setPending((prev) => {
+        const meal = prev.find((s) => s.id === scheduleId);
+        if (meal) setServed((s) => [...s, { ...meal, status: "DONE" }]);
+        return prev.filter((s) => s.id !== scheduleId);
+      });
     } catch (err: any) {
       setErrors((prev) => ({ ...prev, [scheduleId]: err?.message || "Failed" }));
     } finally {
@@ -136,12 +142,16 @@ export function KitchenDashboard({ counts, clients, sauceCount }: Props) {
         <h2 className="section-title">Today&apos;s Meals</h2>
         {mealsLoading ? (
           <div className="loading-shimmer loading-block" style={{ height: 80 }} />
-        ) : meals.length === 0 ? (
+        ) : pending.length === 0 && served.length === 0 ? (
           <p style={{ color: "var(--c-ink-muted)", fontSize: "var(--text-sm)" }}>
             All caught up &mdash; no meals left for today.
           </p>
+        ) : pending.length === 0 ? (
+          <p style={{ color: "var(--c-ink-muted)", fontSize: "var(--text-sm)" }}>
+            No pending meals &mdash; all served!
+          </p>
         ) : (
-          meals.map((meal) => (
+          pending.map((meal) => (
             <div key={meal.id} className="meal-card">
               <div className="meal-info">
                 <div className="meal-name">{meal.skuName ?? "Untitled"}</div>
@@ -171,6 +181,39 @@ export function KitchenDashboard({ counts, clients, sauceCount }: Props) {
           ))
         )}
       </section>
+
+      {/* Served Today */}
+      {!mealsLoading && served.length > 0 && (
+        <section className="section">
+          <h2
+            className="section-title"
+            style={{ cursor: "pointer", userSelect: "none", display: "flex", alignItems: "center", gap: "var(--sp-2)" }}
+            onClick={() => setServedOpen((o) => !o)}
+          >
+            <span style={{
+              display: "inline-block",
+              transition: "transform 0.2s",
+              transform: servedOpen ? "rotate(90deg)" : "rotate(0deg)",
+              fontSize: "0.75em",
+            }}>&#9654;</span>
+            Served Today ({served.length})
+          </h2>
+          {servedOpen && served.map((meal) => (
+            <div key={meal.id} className="meal-card" data-status="done">
+              <div className="meal-info">
+                <div className="meal-name">{meal.skuName ?? "Untitled"}</div>
+                <div className="meal-time">
+                  <span className={`meal-slot ${slotClass(meal.mealSlot)}`}>
+                    {slotLabel(meal.mealSlot)}
+                  </span>
+                  {" "}
+                  <span>{meal.clientName}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
 
       {/* Quick actions */}
       <section className="section">
