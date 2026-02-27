@@ -108,6 +108,172 @@ export const verificationTaskSchema = z.object({
   payload: verificationTaskPayloadSchema.default({})
 });
 
+// ============================================================================
+// REQUEST BODY SCHEMAS (for API input validation)
+// ============================================================================
+
+export const createBatchBodySchema = z.object({
+  componentId: z.string().min(1),
+  rawInputG: z.number().positive().finite(),
+  portionSizeG: z.number().positive().finite().optional(),
+  plannedDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD"),
+});
+
+export const updateBatchStatusBodySchema = z.object({
+  status: z.enum(["PLANNED", "IN_PREP", "COOKING", "COOLING", "PORTIONING", "READY", "SERVED", "CANCELLED"]),
+  actualYieldG: z.number().nonnegative().finite().optional(),
+  lotOverrides: z.array(z.object({
+    ingredientId: z.string().min(1),
+    lotId: z.string().min(1),
+  })).optional(),
+});
+
+export const inventoryAdjustBodySchema = z.object({
+  lotId: z.string().min(1),
+  deltaG: z.number().finite(),
+  reason: z.string().min(1),
+  notes: z.string().optional(),
+});
+
+export const updateVerificationTaskBodySchema = z.object({
+  status: z.enum(["APPROVED", "REJECTED", "RESOLVED"]),
+  decision: z.string().min(1),
+  notes: z.string().optional(),
+});
+
+export const createScheduleItemSchema = z.object({
+  skuCode: z.string().min(1),
+  clientId: z.string().min(1),
+  serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD"),
+  mealSlot: z.string().min(1),
+  servings: z.number().int().positive().default(1),
+  notes: z.string().optional(),
+});
+
+export const createScheduleBodySchema = z.object({
+  items: z.array(createScheduleItemSchema).min(1),
+});
+
+export const updateScheduleStatusBodySchema = z.object({
+  status: z.enum(["PLANNED", "DONE", "SKIPPED"]),
+});
+
+export const bulkScheduleStatusBodySchema = z.object({
+  scheduleIds: z.array(z.string().uuid()).min(1).max(100),
+  status: z.enum(["DONE", "SKIPPED"]),
+});
+
+export const updateClientBodySchema = z.object({
+  email: z.string().email().optional(),
+  phone: z.string().optional(),
+  heightCm: z.number().positive().finite().optional(),
+  weightKg: z.number().positive().finite().optional(),
+  goals: z.string().optional(),
+  preferences: z.string().optional(),
+  exclusions: z.array(z.string()).optional(),
+  dateOfBirth: z.string().datetime().optional().nullable(),
+  sex: z.enum(["male", "female"]).optional().nullable(),
+  activityLevel: z.enum(["sedentary", "light", "moderate", "active", "very_active"]).optional().nullable(),
+  targetKcal: z.number().positive().finite().optional().nullable(),
+  targetProteinG: z.number().nonnegative().finite().optional().nullable(),
+  targetCarbG: z.number().nonnegative().finite().optional().nullable(),
+  targetFatG: z.number().nonnegative().finite().optional().nullable(),
+  targetWeightKg: z.number().positive().finite().optional().nullable(),
+  targetBodyFatPct: z.number().min(0).max(100).optional().nullable(),
+});
+
+export const createBodyCompositionBodySchema = z.object({
+  date: z.string().min(1),
+  bodyFatPct: z.number().min(0).max(100).optional(),
+  leanMassKg: z.number().nonnegative().optional(),
+  source: z.string().min(1),
+});
+
+export const createCheckpointBodySchema = z.object({
+  checkpointType: z.enum(["TEMP_CHECK", "WEIGHT_CHECK", "TIMER", "QUALITY_CHECK", "PHOTO", "NOTE"]),
+  tempC: z.number().finite().optional(),
+  notes: z.string().optional(),
+  timerDurationM: z.number().positive().finite().optional(),
+});
+
+export const createSauceVariantBodySchema = z.object({
+  variantType: z.enum(["BASE", "SPICY", "MILD", "SWEET", "TANGY", "SAVORY"]),
+  kcalPer100g: z.number().nonnegative().finite().optional(),
+  proteinPer100g: z.number().nonnegative().finite().optional(),
+  carbPer100g: z.number().nonnegative().finite().optional(),
+  fatPer100g: z.number().nonnegative().finite().optional(),
+  fiberPer100g: z.number().nonnegative().finite().optional(),
+  sodiumPer100g: z.number().nonnegative().finite().optional(),
+});
+
+export const createSaucePairingBodySchema = z.object({
+  pairedComponentType: z.enum(["PROTEIN", "VEGETABLE", "CARB_BASE", "SAUCE", "CONDIMENT", "SNACK", "BEVERAGE"]),
+  recommended: z.boolean().default(false),
+  defaultPortionG: z.number().positive().finite().optional(),
+  notes: z.string().optional(),
+});
+
+export const parLevelUpdateSchema = z.object({
+  ingredientId: z.string().min(1),
+  parLevelG: z.number().nonnegative().finite().nullable().optional(),
+  reorderPointG: z.number().nonnegative().finite().nullable().optional(),
+});
+
+export const updateParLevelsBodySchema = z.object({
+  updates: z.array(parLevelUpdateSchema).min(1),
+});
+
+export const createYieldCalibrationBodySchema = z.object({
+  componentId: z.string().min(1),
+  method: z.string().optional(),
+  cutForm: z.string().optional(),
+  expectedYieldPct: z.number().positive().finite(),
+  actualYieldPct: z.number().positive().finite(),
+  batchProductionId: z.string().optional(),
+});
+
+export const reviewYieldCalibrationBodySchema = z.object({
+  status: z.enum(["ACCEPTED", "REJECTED"]),
+  reviewNotes: z.string().optional(),
+});
+
+export const createQcIssueBodySchema = z.object({
+  batchProductionId: z.string().min(1),
+  issueType: z.string().min(1),
+  description: z.string().min(1),
+  expectedValue: z.string().optional(),
+  actualValue: z.string().optional(),
+});
+
+export const overrideQcIssueBodySchema = z.object({
+  overrideReason: z.string().min(1),
+});
+
+export const createBiometricBodySchema = z.object({
+  measuredAt: z.string().min(1),
+  heightCm: z.number().positive().finite().nullable().optional(),
+  weightKg: z.number().positive().finite().nullable().optional(),
+  bodyFatPct: z.number().min(0).max(100).nullable().optional(),
+  leanMassKg: z.number().nonnegative().finite().nullable().optional(),
+  restingHr: z.number().positive().int().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  source: z.string().nullable().optional(),
+});
+
+export const createMetricBodySchema = z.object({
+  metricKey: z.string().min(1),
+  value: z.number().finite(),
+  unit: z.string().min(1),
+  observedAt: z.string().min(1),
+  sourceDocumentId: z.string().optional(),
+  verification: z.enum(["UNVERIFIED", "SELF_REPORTED", "PROVIDER_VERIFIED"]).optional(),
+  notes: z.string().optional(),
+});
+
+// ============================================================================
+// DTO TYPES
+// ============================================================================
+
 export type LabelSnapshotDTO = z.infer<typeof labelSnapshotSchema>;
 export type LabelLineageNodeDTO = z.infer<typeof labelLineageNodeSchema>;
 export type MealServiceEventDTO = z.infer<typeof mealServiceEventSchema>;

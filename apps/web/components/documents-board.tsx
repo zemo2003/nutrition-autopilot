@@ -60,16 +60,26 @@ export default function DocumentsBoard({ clientId }: { clientId: string }) {
     notes: "",
   });
 
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
+    setFetchError(null);
     const base = resolveApiBase();
     const params = new URLSearchParams();
     if (filterType !== "all") params.set("type", filterType);
     if (filterStatus !== "all") params.set("status", filterStatus);
-    const res = await fetch(`${base}/v1/clients/${clientId}/documents?${params}`);
-    if (res.ok) {
-      const data = await res.json();
-      setDocuments(data.documents ?? []);
+    try {
+      const res = await fetch(`${base}/v1/clients/${clientId}/documents?${params}`);
+      if (res.ok) {
+        const data = await res.json();
+        setDocuments(data.documents ?? []);
+      } else {
+        setFetchError(`Failed to load documents (${res.status})`);
+      }
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : "Network error loading documents");
     }
     setLoading(false);
   }, [clientId, filterType, filterStatus]);
@@ -77,6 +87,7 @@ export default function DocumentsBoard({ clientId }: { clientId: string }) {
   useEffect(() => { load(); }, [load]);
 
   const handleUpload = async () => {
+    setMutationError(null);
     const base = resolveApiBase();
     const formData = new FormData();
     formData.append("documentType", form.documentType);
@@ -87,28 +98,84 @@ export default function DocumentsBoard({ clientId }: { clientId: string }) {
     const file = fileRef.current?.files?.[0];
     if (file) formData.append("file", file);
 
-    const res = await fetch(`${base}/v1/clients/${clientId}/documents`, {
-      method: "POST",
-      body: formData,
-    });
-    if (res.ok) {
-      setForm({ documentType: "OTHER", collectedAt: new Date().toISOString().slice(0, 10), sourceProvider: "", tags: "", notes: "" });
-      if (fileRef.current) fileRef.current.value = "";
-      setTab("list");
-      load();
+    try {
+      const res = await fetch(`${base}/v1/clients/${clientId}/documents`, {
+        method: "POST",
+        body: formData,
+      });
+      if (res.ok) {
+        setForm({ documentType: "OTHER", collectedAt: new Date().toISOString().slice(0, 10), sourceProvider: "", tags: "", notes: "" });
+        if (fileRef.current) fileRef.current.value = "";
+        setTab("list");
+        load();
+      } else {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        setMutationError(body.error || `Upload failed (${res.status})`);
+      }
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : "Network error uploading document");
     }
   };
 
   const handleVerify = async (id: string) => {
+    setMutationError(null);
     const base = resolveApiBase();
-    await fetch(`${base}/v1/clients/${clientId}/documents/${id}/verify`, { method: "POST" });
-    load();
+    try {
+      const res = await fetch(`${base}/v1/clients/${clientId}/documents/${id}/verify`, { method: "POST" });
+      if (res.ok) {
+        load();
+      } else {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        setMutationError(body.error || `Verify failed (${res.status})`);
+      }
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : "Network error verifying document");
+    }
   };
 
-  if (loading) return <div className="state-box"><div className="state-title">Loading documents...</div></div>;
+  if (loading) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+        <div className="loading-shimmer" style={{ height: 36, borderRadius: "var(--r-md)", width: "30%" }} />
+        <div className="loading-shimmer" style={{ height: 48, borderRadius: "var(--r-md)" }} />
+        <div className="loading-shimmer" style={{ height: 48, borderRadius: "var(--r-md)" }} />
+        <div className="loading-shimmer" style={{ height: 48, borderRadius: "var(--r-md)" }} />
+      </div>
+    );
+  }
 
   return (
     <div>
+      {/* Error banners */}
+      {fetchError && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--sp-3)",
+          padding: "var(--sp-3) var(--sp-4)", marginBottom: "var(--sp-4)",
+          background: "var(--c-danger-soft)", color: "var(--c-danger)",
+          border: "1px solid rgba(239,68,68,0.3)", borderRadius: "var(--r-md)", fontSize: "var(--text-sm)",
+        }}>
+          <span>{fetchError}</span>
+          <button className="btn btn-sm" style={{ background: "var(--c-danger)", color: "#fff" }}
+            onClick={() => { setLoading(true); load(); }}>
+            Retry
+          </button>
+        </div>
+      )}
+      {mutationError && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--sp-3)",
+          padding: "var(--sp-3) var(--sp-4)", marginBottom: "var(--sp-4)",
+          background: "var(--c-danger-soft)", color: "var(--c-danger)",
+          border: "1px solid rgba(239,68,68,0.3)", borderRadius: "var(--r-md)", fontSize: "var(--text-sm)",
+        }}>
+          <span>{mutationError}</span>
+          <button className="btn btn-ghost btn-sm" style={{ color: "var(--c-danger)" }}
+            onClick={() => setMutationError(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="row" style={{ gap: "var(--sp-2)", marginBottom: "var(--sp-4)" }}>
         <button className={`btn ${tab === "list" ? "btn-primary" : "btn-outline"} btn-sm`} onClick={() => setTab("list")}>Documents</button>

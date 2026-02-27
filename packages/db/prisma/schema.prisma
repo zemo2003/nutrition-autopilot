@@ -308,6 +308,15 @@ model Client {
   goals                    String?
   preferences              String?
   exclusions               String[]
+  dateOfBirth              DateTime?
+  sex                      String?
+  activityLevel            String?
+  targetKcal               Float?
+  targetProteinG           Float?
+  targetCarbG              Float?
+  targetFatG               Float?
+  targetWeightKg           Float?
+  targetBodyFatPct         Float?
   bodyCompositionSnapshots Json?
   fileRecords              Json?
   createdAt                DateTime @default(now())
@@ -592,6 +601,7 @@ model LotConsumptionEvent {
   inventoryLot     InventoryLot     @relation(fields: [inventoryLotId], references: [id], onDelete: Restrict)
 
   @@index([mealServiceEventId])
+  @@index([inventoryLotId])
 }
 
 model LabelSnapshot {
@@ -613,6 +623,7 @@ model LabelSnapshot {
   childEdges              LabelLineageEdge[] @relation("childLabel")
 
   @@index([organizationId, labelType])
+  @@index([organizationId, frozenAt])
 }
 
 model LabelLineageEdge {
@@ -819,6 +830,7 @@ model BatchLotConsumption {
   inventoryLot InventoryLot    @relation(fields: [inventoryLotId], references: [id])
 
   @@index([batchId])
+  @@index([inventoryLotId])
 }
 
 model SauceVariant {

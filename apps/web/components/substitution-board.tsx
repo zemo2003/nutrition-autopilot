@@ -70,6 +70,10 @@ export function SubstitutionBoard() {
   const [history, setHistory] = useState<SubRecord[]>([]);
   const [applying, setApplying] = useState<string | null>(null);
 
+  const [initError, setInitError] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [applyError, setApplyError] = useState<string | null>(null);
+
   const api = resolveApiBase();
 
   // Load ingredient list for dropdown
@@ -77,26 +81,38 @@ export function SubstitutionBoard() {
     (async () => {
       try {
         const r = await fetch(`${api}/v1/components?type=`);
-        const d = await r.json();
         // Fall back to inventory projections for ingredient list
         const r2 = await fetch(`${api}/v1/inventory/projections`);
-        const d2 = await r2.json();
-        const ings = (d2.projections ?? []).map((p: any) => ({
-          id: p.ingredientId,
-          name: p.ingredientName,
-          category: p.category,
-        }));
-        setIngredients(ings);
-      } catch {}
+        if (r2.ok) {
+          const d2 = await r2.json();
+          const ings = (d2.projections ?? []).map((p: any) => ({
+            id: p.ingredientId,
+            name: p.ingredientName,
+            category: p.category,
+          }));
+          setIngredients(ings);
+        } else if (r.ok) {
+          const d = await r.json();
+          setIngredients(d.components ?? []);
+        } else {
+          setInitError("Failed to load ingredient list");
+        }
+      } catch (e: any) {
+        setInitError(e?.message || "Network error loading ingredients");
+      }
     })();
   }, [api]);
 
   const fetchHistory = useCallback(async () => {
     try {
       const r = await fetch(`${api}/v1/substitutions`);
-      const d = await r.json();
-      setHistory(d.substitutions ?? []);
-    } catch {}
+      if (r.ok) {
+        const d = await r.json();
+        setHistory(d.substitutions ?? []);
+      }
+    } catch (e: any) {
+      console.warn("Failed to fetch substitution history:", e?.message);
+    }
   }, [api]);
 
   useEffect(() => {
@@ -108,23 +124,31 @@ export function SubstitutionBoard() {
     setLoading(true);
     setSuggestions([]);
     setOriginalInfo(null);
+    setSearchError(null);
     try {
       const params = new URLSearchParams({
         ingredientId: selectedIngId,
         requiredG: requiredG || "200",
       });
       const r = await fetch(`${api}/v1/substitutions/suggest?${params}`);
-      const d = await r.json();
-      setSuggestions(d.suggestions ?? []);
-      setOriginalInfo(d.original ?? null);
-    } catch {}
+      if (r.ok) {
+        const d = await r.json();
+        setSuggestions(d.suggestions ?? []);
+        setOriginalInfo(d.original ?? null);
+      } else {
+        setSearchError(`Search failed (${r.status})`);
+      }
+    } catch (e: any) {
+      setSearchError(e?.message || "Network error searching substitutions");
+    }
     setLoading(false);
   };
 
   const applySubstitution = async (s: SubSuggestion) => {
     setApplying(s.ingredientId);
+    setApplyError(null);
     try {
-      await fetch(`${api}/v1/substitutions/apply`, {
+      const res = await fetch(`${api}/v1/substitutions/apply`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -136,8 +160,15 @@ export function SubstitutionBoard() {
           rankFactors: s.factors,
         }),
       });
-      fetchHistory();
-    } catch {}
+      if (res.ok) {
+        fetchHistory();
+      } else {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        setApplyError(body.error || `Apply failed (${res.status})`);
+      }
+    } catch (e: any) {
+      setApplyError(e?.message || "Network error applying substitution");
+    }
     setApplying(null);
   };
 
@@ -161,6 +192,29 @@ export function SubstitutionBoard() {
       <p style={{ color: "#9ca3af", marginBottom: 16 }}>
         Find ingredient substitutions ranked by category match, allergen safety, inventory availability, and nutrient similarity.
       </p>
+
+      {/* Error banners */}
+      {initError && (
+        <div style={{ background: "#7f1d1d", color: "#fca5a5", padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 13 }}>
+          {initError}
+        </div>
+      )}
+      {searchError && (
+        <div style={{ background: "#7f1d1d", color: "#fca5a5", padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 13 }}>
+          {searchError}
+          <button onClick={() => setSearchError(null)} style={{ marginLeft: 8, color: "#fff", textDecoration: "underline", background: "none", border: "none", cursor: "pointer", fontSize: 12 }}>
+            Dismiss
+          </button>
+        </div>
+      )}
+      {applyError && (
+        <div style={{ background: "#7f1d1d", color: "#fca5a5", padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 13 }}>
+          {applyError}
+          <button onClick={() => setApplyError(null)} style={{ marginLeft: 8, color: "#fff", textDecoration: "underline", background: "none", border: "none", cursor: "pointer", fontSize: 12 }}>
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Tabs */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>

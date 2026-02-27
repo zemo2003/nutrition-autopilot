@@ -57,6 +57,15 @@ type WasteEntry = {
   count: number;
 };
 
+type AllocationItem = {
+  ingredientId: string;
+  ingredientName: string;
+  onHandG: number;
+  allocatedG: number;
+  availableG: number;
+  overallocated: boolean;
+};
+
 type Alert = {
   lotId: string;
   productName: string;
@@ -458,16 +467,46 @@ function ProjectionsTable({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showParEditor, setShowParEditor] = useState<string | null>(null);
 
+  const [orderCopied, setOrderCopied] = useState(false);
+
   const sorted = [...projections].sort(
     (a, b) => (STATUS_SEVERITY[a.status] ?? 99) - (STATUS_SEVERITY[b.status] ?? 99)
   );
 
+  const shortages = projections.filter(
+    (p) => p.parLevelG !== null && p.onHandG < p.parLevelG
+  );
+
+  const generateOrderList = () => {
+    const lines = shortages.map((p) => {
+      const need = (p.parLevelG ?? 0) - p.onHandG;
+      return `${p.ingredientName} \u2014 need ${formatG(need)} (have ${formatG(p.onHandG)}, par ${formatG(p.parLevelG ?? 0)})`;
+    });
+    const text = `Order List (${new Date().toLocaleDateString()})\n${"=".repeat(40)}\n${lines.join("\n")}`;
+    navigator.clipboard.writeText(text).then(() => {
+      setOrderCopied(true);
+      setTimeout(() => setOrderCopied(false), 2000);
+    });
+  };
+
   return (
     <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-      <div style={{ padding: "var(--sp-4) var(--sp-5)", borderBottom: "1px solid var(--c-border)" }}>
-        <h3 style={{ fontSize: "var(--text-md)", fontWeight: "var(--weight-semibold)" as string }}>
+      <div style={{
+        padding: "var(--sp-4) var(--sp-5)", borderBottom: "1px solid var(--c-border)",
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+      }}>
+        <h3 style={{ fontSize: "var(--text-md)", fontWeight: "var(--weight-semibold)" as string, margin: 0 }}>
           Inventory Projections
         </h3>
+        {shortages.length > 0 && (
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={generateOrderList}
+            title="Copy order list to clipboard"
+          >
+            {orderCopied ? "\u2713 Copied!" : `Generate Order List (${shortages.length})`}
+          </button>
+        )}
       </div>
 
       {/* Table header */}
@@ -735,6 +774,107 @@ function DemandForecast({ forecast }: { forecast: DayForecast[] }) {
 
 /* ── Waste Summary Section ────────────────────────────────── */
 
+function AllocationTable({ allocation }: { allocation: AllocationItem[] }) {
+  const [sortCol, setSortCol] = useState<"name" | "onHand" | "allocated" | "available">("name");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+
+  if (allocation.length === 0) {
+    return (
+      <div className="card" style={{ padding: "var(--sp-5)" }}>
+        <h3 style={{ fontSize: "var(--text-md)", fontWeight: "var(--weight-semibold)" as string, marginBottom: "var(--sp-3)" }}>
+          Inventory Allocation (7-Day)
+        </h3>
+        <div style={{ color: "var(--c-ink-muted)", fontSize: "var(--text-sm)", textAlign: "center", padding: "var(--sp-4)" }}>
+          No allocation data available.
+        </div>
+      </div>
+    );
+  }
+
+  const sorted = [...allocation].sort((a, b) => {
+    let cmp = 0;
+    if (sortCol === "name") cmp = a.ingredientName.localeCompare(b.ingredientName);
+    else if (sortCol === "onHand") cmp = a.onHandG - b.onHandG;
+    else if (sortCol === "allocated") cmp = a.allocatedG - b.allocatedG;
+    else cmp = a.availableG - b.availableG;
+    return sortDir === "desc" ? -cmp : cmp;
+  });
+
+  const handleSort = (col: typeof sortCol) => {
+    if (sortCol === col) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortCol(col); setSortDir("asc"); }
+  };
+
+  const overallocatedCount = allocation.filter((a) => a.overallocated).length;
+
+  const colHeader = (col: typeof sortCol, label: string) => (
+    <th
+      style={{ cursor: "pointer", userSelect: "none" }}
+      onClick={() => handleSort(col)}
+    >
+      {label} {sortCol === col ? (sortDir === "asc" ? "\u25B2" : "\u25BC") : ""}
+    </th>
+  );
+
+  return (
+    <div className="card" style={{ padding: "var(--sp-5)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--sp-4)" }}>
+        <h3 style={{ fontSize: "var(--text-md)", fontWeight: "var(--weight-semibold)" as string, margin: 0 }}>
+          Inventory Allocation (7-Day)
+        </h3>
+        {overallocatedCount > 0 && (
+          <span className="badge" style={{
+            background: "var(--c-danger-soft)", color: "var(--c-danger)", fontWeight: 600,
+          }}>
+            {overallocatedCount} over-committed
+          </span>
+        )}
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table className="data-table">
+          <thead>
+            <tr>
+              {colHeader("name", "Ingredient")}
+              {colHeader("onHand", "On Hand")}
+              {colHeader("allocated", "Allocated")}
+              {colHeader("available", "Free Stock")}
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((item) => {
+              const rowColor = item.overallocated
+                ? "var(--c-danger-soft, rgba(239,68,68,0.08))"
+                : item.availableG < item.onHandG * 0.15
+                  ? "var(--c-warning-soft, rgba(255,193,7,0.08))"
+                  : "transparent";
+              return (
+                <tr key={item.ingredientId} style={{ background: rowColor }}>
+                  <td style={{ fontWeight: 500 }}>{item.ingredientName}</td>
+                  <td style={{ fontVariantNumeric: "tabular-nums" }}>{formatG(item.onHandG)}</td>
+                  <td style={{ fontVariantNumeric: "tabular-nums" }}>{formatG(item.allocatedG)}</td>
+                  <td style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, color: item.overallocated ? "var(--c-danger)" : "inherit" }}>
+                    {item.overallocated ? `-${formatG(item.allocatedG - item.onHandG)}` : formatG(item.availableG)}
+                  </td>
+                  <td>
+                    {item.overallocated ? (
+                      <span className="badge" style={{ background: "var(--c-danger-soft)", color: "var(--c-danger)" }}>Over-committed</span>
+                    ) : item.availableG < item.onHandG * 0.15 ? (
+                      <span className="badge" style={{ background: "var(--c-warning-soft)", color: "var(--c-warning)" }}>Low</span>
+                    ) : (
+                      <span className="badge badge-success">OK</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function WasteSummary({ waste }: { waste: WasteEntry[] }) {
   if (waste.length === 0) {
     return (
@@ -824,19 +964,21 @@ export function InventoryBoard() {
   const [projections, setProjections] = useState<InventoryProjection[]>([]);
   const [forecast, setForecast] = useState<DayForecast[]>([]);
   const [waste, setWaste] = useState<WasteEntry[]>([]);
+  const [allocation, setAllocation] = useState<AllocationItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"projections" | "forecast" | "waste">("projections");
+  const [activeTab, setActiveTab] = useState<"projections" | "forecast" | "waste" | "allocation">("projections");
 
   const apiBase = resolveApiBase();
 
   const fetchData = useCallback(async () => {
     try {
       setError(null);
-      const [projRes, forecastRes, wasteRes] = await Promise.all([
+      const [projRes, forecastRes, wasteRes, allocRes] = await Promise.all([
         fetch(`${apiBase}/v1/inventory/projections`).catch(() => null),
         fetch(`${apiBase}/v1/inventory/demand-forecast`).catch(() => null),
         fetch(`${apiBase}/v1/inventory/waste-summary`).catch(() => null),
+        fetch(`${apiBase}/v1/inventory/allocation`).catch(() => null),
       ]);
 
       let hasData = false;
@@ -856,6 +998,12 @@ export function InventoryBoard() {
       if (wasteRes && wasteRes.ok) {
         const data = await wasteRes.json();
         setWaste(data.waste ?? data ?? []);
+        hasData = true;
+      }
+
+      if (allocRes && allocRes.ok) {
+        const data = await allocRes.json();
+        setAllocation(data.allocation ?? data ?? []);
         hasData = true;
       }
 
@@ -918,6 +1066,7 @@ export function InventoryBoard() {
     { key: "projections", label: "Projections" },
     { key: "forecast", label: "Demand Forecast" },
     { key: "waste", label: "Waste Summary" },
+    { key: "allocation", label: "Allocation" },
   ];
 
   return (
@@ -968,6 +1117,10 @@ export function InventoryBoard() {
 
       {activeTab === "waste" && (
         <WasteSummary waste={waste} />
+      )}
+
+      {activeTab === "allocation" && (
+        <AllocationTable allocation={allocation} />
       )}
 
       {/* Empty state */}

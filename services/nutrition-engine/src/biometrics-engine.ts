@@ -229,3 +229,42 @@ export function classifyBMI(bmi: number): string {
   if (bmi < 30) return "overweight";
   return "obese";
 }
+
+export interface BodyCompositionPoint {
+  date: Date;
+  weightKg: number | null;
+  fatMassKg: number | null;
+  leanMassKg: number | null;
+}
+
+/**
+ * Compute a body composition time series from biometric snapshots.
+ * Derives fat mass from weight × body fat percentage when both are available.
+ */
+export function computeBodyCompositionSeries(
+  snapshots: BiometricDataPoint[],
+): BodyCompositionPoint[] {
+  const sorted = sortChronological(snapshots);
+  return sorted
+    .filter((s) => s.weightKg != null || s.leanMassKg != null || s.bodyFatPct != null)
+    .map((s) => {
+      const w = s.weightKg ?? null;
+      const bf = s.bodyFatPct ?? null;
+      let fatMass: number | null = null;
+      let lean: number | null = s.leanMassKg ?? null;
+
+      if (w != null && bf != null) {
+        fatMass = Math.round((w * bf / 100) * 10) / 10;
+        if (lean == null) {
+          lean = Math.round((w - fatMass) * 10) / 10;
+        }
+      }
+
+      return {
+        date: s.measuredAt,
+        weightKg: w,
+        fatMassKg: fatMass,
+        leanMassKg: lean,
+      };
+    });
+}

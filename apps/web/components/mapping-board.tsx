@@ -98,9 +98,14 @@ export function MappingBoard() {
   const fetchHistory = useCallback(async () => {
     try {
       const r = await fetch(`${api}/v1/mappings/history`);
-      const d = await r.json();
-      setHistory(d.mappings ?? []);
-    } catch {}
+      if (r.ok) {
+        const d = await r.json();
+        setHistory(d.mappings ?? []);
+      }
+    } catch (e: any) {
+      // History fetch is secondary — don't block queue
+      console.warn("Failed to fetch mapping history:", e?.message);
+    }
   }, [api]);
 
   useEffect(() => {
@@ -108,20 +113,31 @@ export function MappingBoard() {
     fetchHistory();
   }, [fetchUnmapped, fetchHistory]);
 
+  const [sugError, setSugError] = useState<string | null>(null);
+
   const loadSuggestions = async (item: UnmappedItem) => {
     setSelectedItem(item);
     setSuggestions([]);
     setSugLoading(true);
+    setSugError(null);
     try {
       const params = new URLSearchParams({ productName: item.productName });
       if (item.brand) params.set("brand", item.brand);
       if (item.upc) params.set("upc", item.upc);
       const r = await fetch(`${api}/v1/mappings/suggestions?${params}`);
-      const d = await r.json();
-      setSuggestions(d.suggestions ?? []);
-    } catch {}
+      if (r.ok) {
+        const d = await r.json();
+        setSuggestions(d.suggestions ?? []);
+      } else {
+        setSugError(`Failed to load suggestions (${r.status})`);
+      }
+    } catch (e: any) {
+      setSugError(e?.message || "Network error loading suggestions");
+    }
     setSugLoading(false);
   };
+
+  const [resolveError, setResolveError] = useState<string | null>(null);
 
   const resolveMapping = async (
     action: "approve" | "search_select" | "create_new" | "mark_pantry",
@@ -130,8 +146,9 @@ export function MappingBoard() {
   ) => {
     if (!selectedItem) return;
     setResolving(true);
+    setResolveError(null);
     try {
-      await fetch(`${api}/v1/mappings/resolve`, {
+      const res = await fetch(`${api}/v1/mappings/resolve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -144,13 +161,20 @@ export function MappingBoard() {
           pantryReason: action === "mark_pantry" ? pantryReason : undefined,
         }),
       });
-      setSelectedItem(null);
-      setSuggestions([]);
-      setNewIngName("");
-      setPantryReason("");
-      fetchUnmapped();
-      fetchHistory();
-    } catch {}
+      if (res.ok) {
+        setSelectedItem(null);
+        setSuggestions([]);
+        setNewIngName("");
+        setPantryReason("");
+        fetchUnmapped();
+        fetchHistory();
+      } else {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        setResolveError(body.error || `Resolve failed (${res.status})`);
+      }
+    } catch (e: any) {
+      setResolveError(e?.message || "Network error resolving mapping");
+    }
     setResolving(false);
   };
 
@@ -277,6 +301,24 @@ export function MappingBoard() {
               </p>
 
               {sugLoading && <div style={{ color: "#9ca3af" }}>Loading suggestions...</div>}
+
+              {sugError && (
+                <div style={{ background: "#7f1d1d", color: "#fca5a5", padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 13 }}>
+                  {sugError}
+                  <button onClick={() => loadSuggestions(selectedItem)} style={{ marginLeft: 8, color: "#fff", textDecoration: "underline", background: "none", border: "none", cursor: "pointer", fontSize: 12 }}>
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {resolveError && (
+                <div style={{ background: "#7f1d1d", color: "#fca5a5", padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 13 }}>
+                  {resolveError}
+                  <button onClick={() => setResolveError(null)} style={{ marginLeft: 8, color: "#fff", textDecoration: "underline", background: "none", border: "none", cursor: "pointer", fontSize: 12 }}>
+                    Dismiss
+                  </button>
+                </div>
+              )}
 
               {!sugLoading && suggestions.length > 0 && (
                 <div style={{ marginBottom: 16 }}>

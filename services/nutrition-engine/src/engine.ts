@@ -161,6 +161,12 @@ export function computeSkuLabel(input: LabelComputationInput): LabelComputationR
     }
   }
 
+  // Snapshot original kcal BEFORE hierarchy enforcement (for QA comparison)
+  const originalKcal = perServing.kcal ?? 0;
+
+  // Enforce pre-rounding nutrient hierarchy invariants
+  enforceNutrientHierarchy(perServing);
+
   const roundedFda = {
     // Macronutrients
     calories: roundCalories(perServing.kcal ?? 0),
@@ -180,6 +186,24 @@ export function computeSkuLabel(input: LabelComputationInput): LabelComputationR
     ironMg: roundIron(perServing.iron_mg ?? 0),
     potassiumMg: roundPotassium(perServing.potassium_mg ?? 0)
   };
+
+  // ── Post-rounding hierarchy enforcement ──
+  // FDA rounding can create violations (e.g., sugars=12.6→13g > carbs=12.4→12g).
+  // Clamp sub-components so the label never shows impossible relationships.
+  if (roundedFda.sugarsG > roundedFda.carbG) {
+    roundedFda.sugarsG = roundedFda.carbG;
+  }
+  if (roundedFda.addedSugarsG > roundedFda.sugarsG) {
+    roundedFda.addedSugarsG = roundedFda.sugarsG;
+  }
+  if (roundedFda.fiberG > roundedFda.carbG) {
+    roundedFda.fiberG = roundedFda.carbG;
+  }
+  if (roundedFda.satFatG + roundedFda.transFatG > roundedFda.fatG) {
+    // Prefer shrinking sat fat first (trans fat is always reported)
+    const maxSat = roundedFda.fatG - roundedFda.transFatG;
+    roundedFda.satFatG = Math.max(0, maxSat);
+  }
 
   const servingWeightG = totalWeight / servings;
 
@@ -237,9 +261,10 @@ export function computeSkuLabel(input: LabelComputationInput): LabelComputationR
         .join(", ")}`
     : "Contains: None of the 9 major allergens";
 
-  // Energy invariant: derive kcal from macros (Atwater factors) and compare to reported kcal
+  // Energy invariant: derive kcal from macros (Atwater factors) and compare to ORIGINAL
+  // reported kcal (before hierarchy enforcement corrected it), so QA still flags bad data.
   const macroKcal = (perServing.protein_g ?? 0) * 4 + (perServing.carb_g ?? 0) * 4 + (perServing.fat_g ?? 0) * 9;
-  const rawCalories = perServing.kcal ?? 0;
+  const rawCalories = originalKcal;
   const delta = macroKcal - rawCalories;
 
   // FDA Class I tolerance: ±20%.

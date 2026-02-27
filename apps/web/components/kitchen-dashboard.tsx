@@ -69,44 +69,102 @@ export function KitchenDashboard({ counts, clients, sauceCount }: Props) {
   const [pending, setPending] = useState<ScheduleItem[]>([]);
   const [served, setServed] = useState<ScheduleItem[]>([]);
   const [mealsLoading, setMealsLoading] = useState(true);
+  const [mealsError, setMealsError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [servedOpen, setServedOpen] = useState(true);
   const [overdueOpen, setOverdueOpen] = useState(true);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  // Dashboard summary cards
+  const [dashSummary, setDashSummary] = useState<{
+    activeBatches: number;
+    lowInventory: number;
+    pendingVerifications: number;
+  } | null>(null);
+  const [dashError, setDashError] = useState<string | null>(null);
+
+  // Label warning modal
+  const [labelWarningModal, setLabelWarningModal] = useState<{
+    scheduleId: string;
+    warnings: string[];
+  } | null>(null);
+
+  const fetchMeals = useCallback(async () => {
+    setMealsError(null);
     const base = resolveApiBase();
-    (async () => {
-      try {
-        const [plannedRes, todayRes] = await Promise.all([
-          fetch(`${base}/v1/schedules?status=PLANNED`, { cache: "no-store" }),
-          fetch(`${base}/v1/schedules?from=${todayISO}&to=${todayISO}`, { cache: "no-store" }),
-        ]);
-        if (!plannedRes.ok || !todayRes.ok) throw new Error("Failed to fetch schedules");
-        const [plannedJson, todayJson] = await Promise.all([
-          plannedRes.json() as Promise<{ schedules?: ScheduleItem[] }>,
-          todayRes.json() as Promise<{ schedules?: ScheduleItem[] }>,
-        ]);
-        if (cancelled) return;
-        const allPlanned = (plannedJson.schedules ?? [])
-          .sort((a, b) => a.serviceDate.localeCompare(b.serviceDate) || (SLOT_ORDER[a.mealSlot] ?? 99) - (SLOT_ORDER[b.mealSlot] ?? 99));
-        setOverdue(allPlanned.filter((s) => s.serviceDate < todayISO));
-        setPending(allPlanned.filter((s) => s.serviceDate === todayISO));
-        const todayDone = (todayJson.schedules ?? [])
-          .filter((s) => s.status === "DONE")
-          .sort((a, b) => (SLOT_ORDER[a.mealSlot] ?? 99) - (SLOT_ORDER[b.mealSlot] ?? 99));
-        setServed(todayDone);
-      } catch {
-        // silently fail — KPIs still show from server data
-      } finally {
-        if (!cancelled) setMealsLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
+    try {
+      const [plannedRes, todayRes] = await Promise.all([
+        fetch(`${base}/v1/schedules?status=PLANNED`, { cache: "no-store" }),
+        fetch(`${base}/v1/schedules?from=${todayISO}&to=${todayISO}`, { cache: "no-store" }),
+      ]);
+      if (!plannedRes.ok || !todayRes.ok) throw new Error("Failed to fetch schedules");
+      const [plannedJson, todayJson] = await Promise.all([
+        plannedRes.json() as Promise<{ schedules?: ScheduleItem[] }>,
+        todayRes.json() as Promise<{ schedules?: ScheduleItem[] }>,
+      ]);
+      const allPlanned = (plannedJson.schedules ?? [])
+        .sort((a, b) => a.serviceDate.localeCompare(b.serviceDate) || (SLOT_ORDER[a.mealSlot] ?? 99) - (SLOT_ORDER[b.mealSlot] ?? 99));
+      setOverdue(allPlanned.filter((s) => s.serviceDate < todayISO));
+      setPending(allPlanned.filter((s) => s.serviceDate === todayISO));
+      const todayDone = (todayJson.schedules ?? [])
+        .filter((s) => s.status === "DONE")
+        .sort((a, b) => (SLOT_ORDER[a.mealSlot] ?? 99) - (SLOT_ORDER[b.mealSlot] ?? 99));
+      setServed(todayDone);
+    } catch (err) {
+      setMealsError(err instanceof Error ? err.message : "Failed to load meal schedules");
+    } finally {
+      setMealsLoading(false);
+    }
   }, [todayISO]);
 
-  const handleFed = useCallback(async (scheduleId: string) => {
+  const fetchDashSummary = useCallback(async () => {
+    setDashError(null);
+    const base = resolveApiBase();
+    try {
+      const [batchRes, projRes, verifyRes] = await Promise.all([
+        fetch(`${base}/v1/batches?status=IN_PREP,COOKING,COOLING,PORTIONING`, { cache: "no-store" }),
+        fetch(`${base}/v1/inventory/projections`, { cache: "no-store" }),
+        fetch(`${base}/v1/verification/tasks?status=OPEN`, { cache: "no-store" }),
+      ]);
+
+      let activeBatches = 0;
+      if (batchRes.ok) {
+        const data = await batchRes.json();
+        activeBatches = (data.batches ?? []).length;
+      }
+
+      let lowInventory = 0;
+      if (projRes.ok) {
+        const data = await projRes.json();
+        const projections = data.projections ?? data ?? [];
+        if (Array.isArray(projections)) {
+          lowInventory = projections.filter(
+            (p: any) => typeof p.currentQtyG === "number" && typeof p.parLevelG === "number" && p.currentQtyG < p.parLevelG
+          ).length;
+        }
+      }
+
+      let pendingVerifications = 0;
+      if (verifyRes.ok) {
+        const data = await verifyRes.json();
+        pendingVerifications = (data.tasks ?? []).length;
+      }
+
+      setDashSummary({ activeBatches, lowInventory, pendingVerifications });
+    } catch {
+      setDashError("Failed to load dashboard summary");
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchMeals();
+    fetchDashSummary();
+  }, [fetchMeals, fetchDashSummary]);
+
+  const executeFed = useCallback(async (scheduleId: string) => {
     setActionLoading((prev) => ({ ...prev, [scheduleId]: "DONE" }));
     setErrors((prev) => { const n = { ...prev }; delete n[scheduleId]; return n; });
     try {
@@ -133,6 +191,71 @@ export function KitchenDashboard({ counts, clients, sauceCount }: Props) {
     }
   }, []);
 
+  const handleFed = useCallback(async (scheduleId: string) => {
+    setActionLoading((prev) => ({ ...prev, [scheduleId]: "checking" }));
+    try {
+      const previewRes = await fetch(`${resolveApiBase()}/v1/schedules/${scheduleId}/label-preview`, { cache: "no-store" });
+      if (previewRes.ok) {
+        const preview = await previewRes.json();
+        if (preview.warnings && preview.warnings.length > 0) {
+          setActionLoading((prev) => { const n = { ...prev }; delete n[scheduleId]; return n; });
+          setLabelWarningModal({ scheduleId, warnings: preview.warnings });
+          return;
+        }
+      }
+      // No warnings or preview unavailable — proceed directly
+      setActionLoading((prev) => { const n = { ...prev }; delete n[scheduleId]; return n; });
+      await executeFed(scheduleId);
+    } catch {
+      // If preview check fails, just proceed with feeding
+      setActionLoading((prev) => { const n = { ...prev }; delete n[scheduleId]; return n; });
+      await executeFed(scheduleId);
+    }
+  }, [executeFed]);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAll = useCallback(() => {
+    const allPendingIds = [...overdue, ...pending].map((m) => m.id);
+    setSelected((prev) =>
+      prev.size === allPendingIds.length ? new Set() : new Set(allPendingIds)
+    );
+  }, [overdue, pending]);
+
+  const handleBulkMark = useCallback(async (status: "DONE" | "SKIPPED") => {
+    if (selected.size === 0) return;
+    setBulkLoading(true);
+    setBulkError(null);
+    try {
+      const res = await fetch(`${resolveApiBase()}/v1/schedules/bulk-status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scheduleIds: Array.from(selected), status }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: "Request failed" }));
+        throw new Error(body.error || `Bulk update failed (${res.status})`);
+      }
+      const result = await res.json();
+      if (result.freezeWarnings?.length > 0) {
+        setBulkError(`Updated ${result.updated} meals. Warnings: ${result.freezeWarnings.join("; ")}`);
+      }
+      setSelected(new Set());
+      fetchMeals();
+    } catch (err: any) {
+      setBulkError(err?.message || "Bulk update failed");
+    } finally {
+      setBulkLoading(false);
+    }
+  }, [selected, fetchMeals]);
+
   return (
     <div className="page-shell">
       {/* Hero greeting */}
@@ -152,6 +275,130 @@ export function KitchenDashboard({ counts, clients, sauceCount }: Props) {
         </div>
       </div>
 
+      {/* Dashboard summary cards */}
+      {dashSummary && (
+        <section className="section">
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: "var(--sp-3)",
+          }}>
+            <Link href={"/batch-prep" as any} style={{ textDecoration: "none" }}>
+              <div className="kpi" style={{ cursor: "pointer" }}>
+                <div className="kpi-value">{dashSummary.activeBatches}</div>
+                <div className="kpi-label">Active Batches</div>
+              </div>
+            </Link>
+            <Link href={"/pantry" as any} style={{ textDecoration: "none" }}>
+              <div className="kpi" style={{
+                cursor: "pointer",
+                ...(dashSummary.lowInventory > 0 ? { borderColor: "var(--c-warning)", background: "var(--c-warning-soft, rgba(255,193,7,0.08))" } : {}),
+              }}>
+                <div className="kpi-value" style={dashSummary.lowInventory > 0 ? { color: "var(--c-warning)" } : {}}>
+                  {dashSummary.lowInventory}
+                </div>
+                <div className="kpi-label">Low Inventory</div>
+              </div>
+            </Link>
+            <Link href={"/verification" as any} style={{ textDecoration: "none" }}>
+              <div className="kpi" style={{
+                cursor: "pointer",
+                ...(dashSummary.pendingVerifications > 0 ? { borderColor: "var(--c-danger)", background: "var(--c-danger-soft, rgba(239,68,68,0.08))" } : {}),
+              }}>
+                <div className="kpi-value" style={dashSummary.pendingVerifications > 0 ? { color: "var(--c-danger)" } : {}}>
+                  {dashSummary.pendingVerifications}
+                </div>
+                <div className="kpi-label">Pending Verifications</div>
+              </div>
+            </Link>
+          </div>
+          {dashError && (
+            <div style={{
+              marginTop: "var(--sp-2)", padding: "var(--sp-2) var(--sp-3)",
+              background: "var(--c-danger-soft)", color: "var(--c-danger)",
+              borderRadius: "var(--r-md)", fontSize: "var(--text-xs)",
+            }}>
+              {dashError}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Meals fetch error */}
+      {mealsError && (
+        <section className="section">
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            gap: "var(--sp-3)", padding: "var(--sp-3) var(--sp-4)",
+            background: "var(--c-danger-soft)", color: "var(--c-danger)",
+            border: "1px solid rgba(239,68,68,0.3)", borderRadius: "var(--r-md)", fontSize: "var(--text-sm)",
+          }}>
+            <span>{mealsError}</span>
+            <button className="btn btn-sm" style={{ background: "var(--c-danger)", color: "#fff" }}
+              onClick={() => { setMealsLoading(true); fetchMeals(); }}>
+              Retry
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* Bulk action bar */}
+      {!mealsLoading && (overdue.length > 0 || pending.length > 0) && (
+        <section className="section">
+          <div style={{
+            display: "flex", alignItems: "center", gap: "var(--sp-3)",
+            padding: "var(--sp-2) var(--sp-3)",
+            background: "var(--c-surface-raised, #f8f9fa)",
+            borderRadius: "var(--r-md)",
+            fontSize: "var(--text-sm)",
+            flexWrap: "wrap",
+          }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "var(--sp-1)", cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={selected.size > 0 && selected.size === overdue.length + pending.length}
+                onChange={toggleSelectAll}
+                style={{ width: 16, height: 16 }}
+              />
+              Select All
+            </label>
+            {selected.size > 0 && (
+              <>
+                <span style={{ color: "var(--c-ink-muted)" }}>
+                  {selected.size} selected
+                </span>
+                <button
+                  className="btn btn-primary btn-sm"
+                  disabled={bulkLoading}
+                  onClick={() => handleBulkMark("DONE")}
+                >
+                  {bulkLoading ? "Saving\u2026" : `Mark ${selected.size} as Fed`}
+                </button>
+                <button
+                  className="btn btn-outline btn-sm"
+                  disabled={bulkLoading}
+                  onClick={() => handleBulkMark("SKIPPED")}
+                >
+                  {bulkLoading ? "Saving\u2026" : "Skip Selected"}
+                </button>
+              </>
+            )}
+          </div>
+          {bulkError && (
+            <div style={{
+              marginTop: "var(--sp-2)", padding: "var(--sp-2) var(--sp-3)",
+              background: "var(--c-danger-soft)", color: "var(--c-danger)",
+              borderRadius: "var(--r-md)", fontSize: "var(--text-xs)",
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+            }}>
+              <span>{bulkError}</span>
+              <button className="btn btn-ghost btn-sm" style={{ color: "var(--c-danger)" }}
+                onClick={() => setBulkError(null)}>Dismiss</button>
+            </div>
+          )}
+        </section>
+      )}
+
       {/* Overdue — unfed meals from past days */}
       {!mealsLoading && overdue.length > 0 && (
         <section className="section">
@@ -170,6 +417,12 @@ export function KitchenDashboard({ counts, clients, sauceCount }: Props) {
           </h2>
           {overdueOpen && overdue.map((meal) => (
             <div key={meal.id} className="meal-card" style={{ borderLeftColor: "var(--c-danger, #c0392b)" }}>
+              <input
+                type="checkbox"
+                checked={selected.has(meal.id)}
+                onChange={() => toggleSelect(meal.id)}
+                style={{ width: 16, height: 16, flexShrink: 0, marginRight: "var(--sp-2)" }}
+              />
               <div className="meal-info">
                 <div className="meal-name">{meal.skuName ?? "Untitled"}</div>
                 <div className="meal-time">
@@ -218,6 +471,12 @@ export function KitchenDashboard({ counts, clients, sauceCount }: Props) {
         ) : (
           pending.map((meal) => (
             <div key={meal.id} className="meal-card">
+              <input
+                type="checkbox"
+                checked={selected.has(meal.id)}
+                onChange={() => toggleSelect(meal.id)}
+                style={{ width: 16, height: 16, flexShrink: 0, marginRight: "var(--sp-2)" }}
+              />
               <div className="meal-info">
                 <div className="meal-name">{meal.skuName ?? "Untitled"}</div>
                 <div className="meal-time">
@@ -350,6 +609,60 @@ export function KitchenDashboard({ counts, clients, sauceCount }: Props) {
             ))}
           </div>
         </section>
+      )}
+
+      {/* Label warning confirmation modal */}
+      {labelWarningModal && (
+        <div
+          style={{
+            position: "fixed", inset: 0, zIndex: 1000,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "rgba(0,0,0,0.5)", padding: "var(--sp-4)",
+          }}
+          onClick={() => setLabelWarningModal(null)}
+        >
+          <div
+            style={{
+              background: "var(--c-surface, #fff)", borderRadius: "var(--r-lg, 12px)",
+              padding: "var(--sp-5, 24px)", maxWidth: 440, width: "100%",
+              boxShadow: "0 8px 32px rgba(0,0,0,0.2)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: "0 0 var(--sp-3, 12px) 0", fontSize: "var(--text-lg, 18px)" }}>
+              Label Warnings
+            </h3>
+            <p style={{ margin: "0 0 var(--sp-3, 12px) 0", fontSize: "var(--text-sm)", color: "var(--c-ink-muted)" }}>
+              This meal has label issues that will be frozen when marked as Fed:
+            </p>
+            <ul style={{
+              margin: "0 0 var(--sp-4, 16px) 0", paddingLeft: "var(--sp-4, 16px)",
+              fontSize: "var(--text-sm)", color: "var(--c-danger)",
+            }}>
+              {labelWarningModal.warnings.map((w, i) => (
+                <li key={i} style={{ marginBottom: "var(--sp-1, 4px)" }}>{w}</li>
+              ))}
+            </ul>
+            <div style={{ display: "flex", gap: "var(--sp-2)", justifyContent: "flex-end" }}>
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={() => setLabelWarningModal(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => {
+                  const sid = labelWarningModal.scheduleId;
+                  setLabelWarningModal(null);
+                  executeFed(sid);
+                }}
+              >
+                Mark Fed Anyway
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

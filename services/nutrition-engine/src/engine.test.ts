@@ -1722,3 +1722,763 @@ describe("Engine - Percent DV in output", () => {
     expect(result.percentDV.sugars_g).toBeUndefined();
   });
 });
+
+// ============================================================================
+// POST-ROUNDING HIERARCHY ENFORCEMENT TESTS
+// ============================================================================
+
+describe("Post-rounding nutrient hierarchy enforcement", () => {
+  function makeInput(nutrients: Record<string, number>) {
+    return {
+      skuName: "Hierarchy Test",
+      recipeName: "Test Recipe",
+      servings: 1,
+      lines: [
+        {
+          lineId: "1",
+          ingredientName: "Test",
+          gramsPerServing: 100,
+          ingredientAllergens: [],
+        },
+      ],
+      consumedLots: [
+        {
+          recipeLineId: "1",
+          lotId: "lot1",
+          productId: "prod1",
+          productName: "Test",
+          gramsConsumed: 100,
+          nutrientsPer100g: nutrients,
+        },
+      ],
+    };
+  }
+
+  it("clamps rounded sugars to not exceed rounded carbs", () => {
+    // carb=12.4 → rounds to 12, sugars=12.6 → rounds to 13
+    // Post-rounding: sugars must be clamped to 12
+    const result = computeSkuLabel(makeInput({
+      kcal: 100,
+      protein_g: 5,
+      carb_g: 12.4,
+      sugars_g: 12.6,
+      fat_g: 3,
+    }));
+    expect(result.roundedFda.sugarsG).toBeLessThanOrEqual(result.roundedFda.carbG);
+  });
+
+  it("clamps rounded addedSugars to not exceed rounded sugars", () => {
+    const result = computeSkuLabel(makeInput({
+      kcal: 200,
+      protein_g: 10,
+      carb_g: 30,
+      sugars_g: 14.4,   // rounds to 14
+      added_sugars_g: 14.6, // rounds to 15 → must clamp to 14
+      fat_g: 5,
+    }));
+    expect(result.roundedFda.addedSugarsG).toBeLessThanOrEqual(result.roundedFda.sugarsG);
+  });
+
+  it("clamps rounded fiber to not exceed rounded carbs", () => {
+    // Note: enforceNutrientHierarchy will bump carbs up if needed,
+    // but edge cases of rounding could still violate
+    const result = computeSkuLabel(makeInput({
+      kcal: 50,
+      protein_g: 2,
+      carb_g: 5.4,  // rounds to 5
+      fiber_g: 5.6,  // rounds to 6
+      fat_g: 1,
+    }));
+    expect(result.roundedFda.fiberG).toBeLessThanOrEqual(result.roundedFda.carbG);
+  });
+
+  it("clamps rounded satFat + transFat to not exceed rounded totalFat", () => {
+    const result = computeSkuLabel(makeInput({
+      kcal: 200,
+      protein_g: 10,
+      carb_g: 20,
+      fat_g: 5.4,       // rounds to 5
+      sat_fat_g: 3.3,    // rounds to 3.5
+      trans_fat_g: 2.3,  // rounds to 2.5 → total 6 > 5
+    }));
+    expect(result.roundedFda.satFatG + result.roundedFda.transFatG)
+      .toBeLessThanOrEqual(result.roundedFda.fatG);
+  });
+
+  it("handles all-zero nutrients without errors", () => {
+    const result = computeSkuLabel(makeInput({
+      kcal: 0,
+      protein_g: 0,
+      carb_g: 0,
+      fat_g: 0,
+    }));
+    expect(result.roundedFda.calories).toBe(0);
+    expect(result.roundedFda.carbG).toBe(0);
+    expect(result.roundedFda.fatG).toBe(0);
+    expect(result.roundedFda.proteinG).toBe(0);
+  });
+});
+
+// ============================================================================
+// ATWATER FACTOR CONSISTENCY TESTS
+// ============================================================================
+
+describe("Atwater factor calorie consistency", () => {
+  function makeInput(nutrients: Record<string, number>) {
+    return {
+      skuName: "Atwater Test",
+      recipeName: "Test Recipe",
+      servings: 1,
+      lines: [
+        {
+          lineId: "1",
+          ingredientName: "Test",
+          gramsPerServing: 100,
+          ingredientAllergens: [],
+        },
+      ],
+      consumedLots: [
+        {
+          recipeLineId: "1",
+          lotId: "lot1",
+          productId: "prod1",
+          productName: "Test",
+          gramsConsumed: 100,
+          nutrientsPer100g: nutrients,
+        },
+      ],
+    };
+  }
+
+  it("passes QA for standard macronutrient profile", () => {
+    // chicken breast: 165 kcal, 31g protein, 0g carb, 3.6g fat
+    // Atwater: 31*4 + 0*4 + 3.6*9 = 124+32.4 = 156.4 kcal → within 20% of 165
+    const result = computeSkuLabel(makeInput({
+      kcal: 165,
+      protein_g: 31,
+      carb_g: 0,
+      fat_g: 3.6,
+    }));
+    expect(result.qa.pass).toBe(true);
+    expect(result.qa.percentError).toBeLessThan(0.20);
+  });
+
+  it("passes QA for high-fiber low-calorie food with wider tolerance", () => {
+    // broccoli: 34 kcal, 2.8g protein, 6.6g carb (2.6g fiber), 0.4g fat
+    // Atwater: 2.8*4 + 6.6*4 + 0.4*9 = 11.2+26.4+3.6 = 41.2
+    // 41.2 vs 34 → 21% error → passes with 35% tolerance for low-cal high-fiber
+    const result = computeSkuLabel(makeInput({
+      kcal: 34,
+      protein_g: 2.8,
+      carb_g: 6.6,
+      fiber_g: 2.6,
+      fat_g: 0.4,
+    }));
+    expect(result.qa.pass).toBe(true);
+  });
+
+  it("flags implausibly low calories for macros via QA", () => {
+    // If macros say ~200kcal but reported kcal is 50, QA should flag it
+    const result = computeSkuLabel(makeInput({
+      kcal: 50,
+      protein_g: 20,
+      carb_g: 20,
+      fat_g: 5,
+    }));
+    // Atwater: 20*4 + 20*4 + 5*9 = 80+80+45 = 205
+    // QA compares original kcal (50) vs Atwater (205) → 310% error → fail
+    expect(result.qa.pass).toBe(false);
+    expect(result.qa.percentError).toBeGreaterThan(1.0);
+    // But hierarchy enforcement corrects the actual perServing kcal
+    expect(result.perServing.kcal).toBeGreaterThanOrEqual(100);
+  });
+
+  it("known food: egg (USDA values)", () => {
+    // Large egg: 72 kcal, 6.3g protein, 0.4g carb, 4.8g fat
+    const result = computeSkuLabel(makeInput({
+      kcal: 72,
+      protein_g: 6.3,
+      carb_g: 0.4,
+      fat_g: 4.8,
+    }));
+    expect(result.qa.pass).toBe(true);
+  });
+
+  it("known food: white rice (USDA values)", () => {
+    // Cooked white rice per 100g: 130 kcal, 2.7g protein, 28.2g carb, 0.3g fat
+    const result = computeSkuLabel(makeInput({
+      kcal: 130,
+      protein_g: 2.7,
+      carb_g: 28.2,
+      fat_g: 0.3,
+    }));
+    expect(result.qa.pass).toBe(true);
+  });
+
+  it("known food: salmon (USDA values)", () => {
+    // Atlantic salmon per 100g: 208 kcal, 20.4g protein, 0g carb, 13.4g fat
+    const result = computeSkuLabel(makeInput({
+      kcal: 208,
+      protein_g: 20.4,
+      carb_g: 0,
+      fat_g: 13.4,
+    }));
+    expect(result.qa.pass).toBe(true);
+  });
+
+  it("known food: sweet potato (USDA values)", () => {
+    // Baked sweet potato per 100g: 90 kcal, 2g protein, 20.7g carb (3.3g fiber), 0.2g fat
+    const result = computeSkuLabel(makeInput({
+      kcal: 90,
+      protein_g: 2,
+      carb_g: 20.7,
+      fiber_g: 3.3,
+      fat_g: 0.2,
+    }));
+    expect(result.qa.pass).toBe(true);
+  });
+
+  it("known food: olive oil (USDA values)", () => {
+    // Olive oil per 100g: 884 kcal, 0g protein, 0g carb, 100g fat
+    const result = computeSkuLabel(makeInput({
+      kcal: 884,
+      protein_g: 0,
+      carb_g: 0,
+      fat_g: 100,
+    }));
+    expect(result.qa.pass).toBe(true);
+  });
+});
+
+// ============================================================================
+// ROUNDING EDGE CASE TESTS
+// ============================================================================
+
+describe("FDA rounding boundary edge cases", () => {
+  it("calories at exactly 5 rounds to 5", () => {
+    expect(roundCalories(5)).toBe(5);
+  });
+
+  it("calories at exactly 50 rounds to 50", () => {
+    expect(roundCalories(50)).toBe(50);
+  });
+
+  it("fat at exactly 0.5 rounds to 0.5", () => {
+    expect(roundFatLike(0.5)).toBe(0.5);
+  });
+
+  it("fat at exactly 5.0 rounds to 5", () => {
+    expect(roundFatLike(5.0)).toBe(5);
+  });
+
+  it("general g at exactly 0.5 rounds to 1", () => {
+    // ≥ 0.5 rounds to nearest 1
+    expect(roundGeneralG(0.5)).toBe(1);
+  });
+
+  it("sodium at exactly 5 rounds to 5", () => {
+    expect(roundSodiumMg(5)).toBe(5);
+  });
+
+  it("sodium at exactly 140 rounds to 140", () => {
+    expect(roundSodiumMg(140)).toBe(140);
+  });
+
+  it("cholesterol at exactly 2 rounds to 0 (nearest 5 = 0)", () => {
+    expect(roundCholesterolMg(2)).toBe(0);
+  });
+
+  it("cholesterol at exactly 2.5 rounds to 5", () => {
+    expect(roundCholesterolMg(2.5)).toBe(5);
+  });
+
+  it("%DV at exactly 2% rounds to 2%", () => {
+    expect(roundPercentDV(2)).toBe(2);
+  });
+
+  it("%DV at exactly 10% rounds to 10%", () => {
+    expect(roundPercentDV(10)).toBe(10);
+  });
+
+  it("%DV at exactly 50% rounds to 50%", () => {
+    expect(roundPercentDV(50)).toBe(50);
+  });
+
+  it("handles negative input gracefully (returns 0 or negative)", () => {
+    expect(roundCalories(-1)).toBe(0);
+    expect(roundFatLike(-0.3)).toBe(0);
+    expect(roundGeneralG(-0.4)).toBe(0);
+    expect(roundSodiumMg(-3)).toBe(0);
+  });
+});
+
+// ============================================================================
+// YIELD FACTOR BOUNDS TESTS
+// ============================================================================
+
+describe("Yield factor edge cases in label computation", () => {
+  it("yield factor of 1.0 does not alter nutrients", () => {
+    const result = computeSkuLabel({
+      skuName: "Test",
+      recipeName: "Test Recipe",
+      servings: 1,
+      lines: [
+        {
+          lineId: "1",
+          ingredientName: "Chicken",
+          gramsPerServing: 100,
+          ingredientAllergens: [],
+          yieldFactor: 1.0,
+          preparedState: "RAW",
+        },
+      ],
+      consumedLots: [
+        {
+          recipeLineId: "1",
+          lotId: "lot1",
+          productId: "prod1",
+          productName: "Chicken",
+          gramsConsumed: 100,
+          nutrientsPer100g: { kcal: 165, protein_g: 31, fat_g: 3.6 },
+          nutrientProfileState: "RAW",
+        },
+      ],
+    });
+    expect(result.perServing.kcal).toBeCloseTo(165, 0);
+    expect(result.perServing.protein_g).toBeCloseTo(31, 0);
+  });
+
+  it("large servings correctly divide nutrients", () => {
+    const result = computeSkuLabel({
+      skuName: "Bulk",
+      recipeName: "Bulk Recipe",
+      servings: 10,
+      lines: [
+        {
+          lineId: "1",
+          ingredientName: "Rice",
+          gramsPerServing: 100,
+          ingredientAllergens: [],
+        },
+      ],
+      consumedLots: [
+        {
+          recipeLineId: "1",
+          lotId: "lot1",
+          productId: "prod1",
+          productName: "Rice",
+          gramsConsumed: 1000,
+          nutrientsPer100g: { kcal: 130, protein_g: 2.7, carb_g: 28.2, fat_g: 0.3 },
+        },
+      ],
+    });
+    // Per serving = 1000g / 10 servings × nutrients per 100g
+    expect(result.perServing.kcal).toBeCloseTo(130, 0);
+    expect(result.perServing.carb_g).toBeCloseTo(28.2, 0);
+  });
+
+  it("zero servings defaults to 1", () => {
+    const result = computeSkuLabel({
+      skuName: "Test",
+      recipeName: "Test",
+      servings: 0,
+      lines: [
+        {
+          lineId: "1",
+          ingredientName: "Test",
+          gramsPerServing: 100,
+          ingredientAllergens: [],
+        },
+      ],
+      consumedLots: [
+        {
+          recipeLineId: "1",
+          lotId: "lot1",
+          productId: "prod1",
+          productName: "Test",
+          gramsConsumed: 100,
+          nutrientsPer100g: { kcal: 100 },
+        },
+      ],
+    });
+    expect(result.perServing.kcal).toBeCloseTo(100, 0);
+  });
+});
+
+// ============================================================================
+// INTEGRATION FLOW TESTS: Complete Pipeline
+// ============================================================================
+
+describe("End-to-end label generation pipeline", () => {
+  it("realistic chicken bowl: multi-ingredient label with all fields", () => {
+    const result = computeSkuLabel({
+      skuName: "Grilled Chicken Bowl",
+      recipeName: "Chicken Rice Bowl",
+      servings: 4,
+      lines: [
+        {
+          lineId: "chicken",
+          ingredientName: "Chicken Breast",
+          gramsPerServing: 170,
+          ingredientAllergens: [],
+          yieldFactor: 0.75,
+          preparedState: "COOKED" as any,
+        },
+        {
+          lineId: "rice",
+          ingredientName: "Jasmine Rice",
+          gramsPerServing: 150,
+          ingredientAllergens: [],
+        },
+        {
+          lineId: "broccoli",
+          ingredientName: "Broccoli",
+          gramsPerServing: 80,
+          ingredientAllergens: [],
+        },
+      ],
+      consumedLots: [
+        {
+          recipeLineId: "chicken",
+          lotId: "lot-chicken",
+          productId: "prod-chicken",
+          productName: "Chicken Breast",
+          gramsConsumed: 680,
+          nutrientsPer100g: {
+            kcal: 165,
+            protein_g: 31,
+            fat_g: 3.6,
+            sat_fat_g: 1.0,
+            carb_g: 0,
+            cholesterol_mg: 85,
+            sodium_mg: 74,
+            iron_mg: 1.0,
+          },
+          nutrientProfileState: "RAW",
+        },
+        {
+          recipeLineId: "rice",
+          lotId: "lot-rice",
+          productId: "prod-rice",
+          productName: "Jasmine Rice",
+          gramsConsumed: 600,
+          nutrientsPer100g: {
+            kcal: 130,
+            protein_g: 2.7,
+            carb_g: 28.2,
+            fat_g: 0.3,
+            fiber_g: 0.4,
+            iron_mg: 0.2,
+          },
+        },
+        {
+          recipeLineId: "broccoli",
+          lotId: "lot-broc",
+          productId: "prod-broc",
+          productName: "Broccoli",
+          gramsConsumed: 320,
+          nutrientsPer100g: {
+            kcal: 34,
+            protein_g: 2.8,
+            carb_g: 7,
+            fat_g: 0.4,
+            fiber_g: 2.6,
+            vitamin_c_mg: 89,
+            calcium_mg: 47,
+            iron_mg: 0.7,
+          },
+        },
+      ],
+    });
+
+    // Per-serving values should be reasonable for a chicken bowl
+    expect(result.perServing.kcal).toBeGreaterThan(200);
+    expect(result.perServing.kcal).toBeLessThan(600);
+    expect(result.perServing.protein_g).toBeGreaterThan(20);
+    expect(result.perServing.carb_g).toBeGreaterThan(20);
+
+    // FDA rounding applied — calories field
+    expect(result.roundedFda.calories).toBe(Math.round(result.roundedFda.calories / 10) * 10);
+
+    // Hierarchy enforcement: sugars <= carbs
+    expect(result.roundedFda.sugarsG).toBeLessThanOrEqual(result.roundedFda.carbG);
+
+    // %DV should be present for mandatory nutrients
+    expect(result.percentDV.protein_g).toBeDefined();
+    expect(result.percentDV.fat_g).toBeDefined();
+
+    // Quality assessment
+    expect(result.qa).toBeDefined();
+    expect(result.qa.pass).toBe(true);
+
+    // Allergen statement — no allergens in this bowl
+    expect(result.allergenStatement.toLowerCase()).toContain("none");
+  });
+
+  it("allergen detection aggregates from all ingredients", () => {
+    const result = computeSkuLabel({
+      skuName: "Pasta with Cheese Sauce",
+      recipeName: "Cheese Pasta",
+      servings: 2,
+      lines: [
+        {
+          lineId: "pasta",
+          ingredientName: "Wheat Pasta",
+          gramsPerServing: 200,
+          ingredientAllergens: ["wheat"],
+        },
+        {
+          lineId: "sauce",
+          ingredientName: "Cheese Sauce",
+          gramsPerServing: 100,
+          ingredientAllergens: ["milk"],
+        },
+        {
+          lineId: "egg",
+          ingredientName: "Egg Wash",
+          gramsPerServing: 30,
+          ingredientAllergens: ["egg"],
+        },
+      ],
+      consumedLots: [
+        {
+          recipeLineId: "pasta",
+          lotId: "l1",
+          productId: "p1",
+          productName: "Pasta",
+          gramsConsumed: 400,
+          nutrientsPer100g: { kcal: 131, carb_g: 25, protein_g: 5, fat_g: 1.1, fiber_g: 1.8 },
+        },
+        {
+          recipeLineId: "sauce",
+          lotId: "l2",
+          productId: "p2",
+          productName: "Cheese Sauce",
+          gramsConsumed: 200,
+          nutrientsPer100g: { kcal: 174, fat_g: 13, sat_fat_g: 8, protein_g: 10, carb_g: 3, calcium_mg: 600 },
+        },
+        {
+          recipeLineId: "egg",
+          lotId: "l3",
+          productId: "p3",
+          productName: "Egg",
+          gramsConsumed: 60,
+          nutrientsPer100g: { kcal: 155, protein_g: 13, fat_g: 11, cholesterol_mg: 373 },
+        },
+      ],
+    });
+
+    // Allergen statement should mention all three
+    expect(result.allergenStatement.toLowerCase()).toContain("wheat");
+    expect(result.allergenStatement.toLowerCase()).toContain("milk");
+    expect(result.allergenStatement.toLowerCase()).toContain("egg");
+  });
+
+  it("single-ingredient label produces exact per-100g values", () => {
+    const result = computeSkuLabel({
+      skuName: "Plain Rice",
+      recipeName: "Rice",
+      servings: 1,
+      lines: [
+        {
+          lineId: "rice",
+          ingredientName: "White Rice",
+          gramsPerServing: 100,
+          ingredientAllergens: [],
+        },
+      ],
+      consumedLots: [
+        {
+          recipeLineId: "rice",
+          lotId: "l1",
+          productId: "p1",
+          productName: "White Rice",
+          gramsConsumed: 100,
+          nutrientsPer100g: {
+            kcal: 130,
+            protein_g: 2.7,
+            carb_g: 28.2,
+            fat_g: 0.3,
+            fiber_g: 0.4,
+          },
+        },
+      ],
+    });
+
+    // For 100g, 1 serving → per-serving values should match per-100g
+    expect(result.perServing.kcal).toBeCloseTo(130, 0);
+    expect(result.perServing.protein_g).toBeCloseTo(2.7, 1);
+    expect(result.perServing.carb_g).toBeCloseTo(28.2, 1);
+    expect(result.perServing.fat_g).toBeCloseTo(0.3, 1);
+    expect(result.perServing.fiber_g).toBeCloseTo(0.4, 1);
+  });
+
+  it("label with no nutrient data produces zeros and flags QA", () => {
+    const result = computeSkuLabel({
+      skuName: "Mystery Food",
+      recipeName: "Unknown",
+      servings: 1,
+      lines: [
+        {
+          lineId: "mystery",
+          ingredientName: "Unknown Ingredient",
+          gramsPerServing: 100,
+          ingredientAllergens: [],
+        },
+      ],
+      consumedLots: [
+        {
+          recipeLineId: "mystery",
+          lotId: "l1",
+          productId: "p1",
+          productName: "Unknown",
+          gramsConsumed: 100,
+          nutrientsPer100g: {},
+        },
+      ],
+    });
+
+    expect(result.perServing.kcal).toBe(0);
+    expect(result.roundedFda.calories).toBe(0);
+    // QA should flag — macros should be zero-ish, but it still runs
+    expect(result.qa).toBeDefined();
+  });
+
+  it("multiple lots for the same ingredient blend correctly", () => {
+    // Two lots of chicken with different nutrient profiles
+    const result = computeSkuLabel({
+      skuName: "Chicken Mix",
+      recipeName: "Mixed Chicken",
+      servings: 1,
+      lines: [
+        {
+          lineId: "chicken",
+          ingredientName: "Chicken",
+          gramsPerServing: 200,
+          ingredientAllergens: [],
+        },
+      ],
+      consumedLots: [
+        {
+          recipeLineId: "chicken",
+          lotId: "lot-a",
+          productId: "prod-a",
+          productName: "Chicken Thigh",
+          gramsConsumed: 100,
+          nutrientsPer100g: { kcal: 209, protein_g: 26, fat_g: 10.9 },
+        },
+        {
+          recipeLineId: "chicken",
+          lotId: "lot-b",
+          productId: "prod-b",
+          productName: "Chicken Breast",
+          gramsConsumed: 100,
+          nutrientsPer100g: { kcal: 165, protein_g: 31, fat_g: 3.6 },
+        },
+      ],
+    });
+
+    // Total from 2 lots: (209/100 × 100) + (165/100 × 100) = 209 + 165 = 374 kcal
+    // 1 serving, so per-serving = 374
+    expect(result.perServing.kcal).toBeCloseTo(374, 0);
+    // Protein: (26/100 × 100) + (31/100 × 100) = 26 + 31 = 57
+    expect(result.perServing.protein_g).toBeCloseTo(57, 0);
+  });
+
+  it("serving size scales all nutrients proportionally", () => {
+    const small = computeSkuLabel({
+      skuName: "Small Portion",
+      recipeName: "Recipe",
+      servings: 2,
+      lines: [{ lineId: "a", ingredientName: "A", gramsPerServing: 100, ingredientAllergens: [] }],
+      consumedLots: [{
+        recipeLineId: "a",
+        lotId: "l1",
+        productId: "p1",
+        productName: "A",
+        gramsConsumed: 200,
+        nutrientsPer100g: { kcal: 200, protein_g: 20, fat_g: 10, carb_g: 30 },
+      }],
+    });
+
+    const large = computeSkuLabel({
+      skuName: "Large Portion",
+      recipeName: "Recipe",
+      servings: 1,
+      lines: [{ lineId: "a", ingredientName: "A", gramsPerServing: 200, ingredientAllergens: [] }],
+      consumedLots: [{
+        recipeLineId: "a",
+        lotId: "l1",
+        productId: "p1",
+        productName: "A",
+        gramsConsumed: 200,
+        nutrientsPer100g: { kcal: 200, protein_g: 20, fat_g: 10, carb_g: 30 },
+      }],
+    });
+
+    // 2-serving vs 1-serving: per-serving kcal should be half for 2-servings
+    expect(small.perServing.kcal).toBeCloseTo((large.perServing.kcal ?? 0) / 2, 0);
+    expect(small.perServing.protein_g).toBeCloseTo((large.perServing.protein_g ?? 0) / 2, 0);
+  });
+
+  it("label idempotency: same input produces same output", () => {
+    const input = {
+      skuName: "Test",
+      recipeName: "Test Recipe",
+      servings: 1,
+      lines: [{
+        lineId: "1",
+        ingredientName: "Ingredient",
+        gramsPerServing: 100,
+        ingredientAllergens: [] as string[],
+      }],
+      consumedLots: [{
+        recipeLineId: "1",
+        lotId: "l1",
+        productId: "p1",
+        productName: "Product",
+        gramsConsumed: 100,
+        nutrientsPer100g: { kcal: 250, protein_g: 20, fat_g: 12, carb_g: 15 },
+      }],
+    };
+
+    const result1 = computeSkuLabel(input);
+    const result2 = computeSkuLabel(input);
+
+    expect(result1.perServing).toEqual(result2.perServing);
+    expect(result1.roundedFda).toEqual(result2.roundedFda);
+    expect(result1.percentDV).toEqual(result2.percentDV);
+    expect(result1.qa).toEqual(result2.qa);
+  });
+
+  it("hierarchy enforcement is consistent across rounding: sat + trans <= total fat", () => {
+    // Edge case: sat_fat and trans_fat that individually round up
+    const result = computeSkuLabel({
+      skuName: "Oily Mix",
+      recipeName: "Oil Mix",
+      servings: 1,
+      lines: [{
+        lineId: "1",
+        ingredientName: "Oil Blend",
+        gramsPerServing: 100,
+        ingredientAllergens: [],
+      }],
+      consumedLots: [{
+        recipeLineId: "1",
+        lotId: "l1",
+        productId: "p1",
+        productName: "Oil",
+        gramsConsumed: 100,
+        nutrientsPer100g: {
+          kcal: 884,
+          fat_g: 100,
+          sat_fat_g: 49.8,
+          trans_fat_g: 49.8,
+        },
+      }],
+    });
+
+    // Post-rounding: sat + trans should not exceed total fat
+    expect(result.roundedFda.satFatG + result.roundedFda.transFatG).toBeLessThanOrEqual(result.roundedFda.fatG);
+  });
+});

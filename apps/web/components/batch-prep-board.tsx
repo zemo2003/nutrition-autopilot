@@ -112,6 +112,13 @@ export function BatchPrepBoard() {
   const [advancingId, setAdvancingId] = useState<string | null>(null);
   const [actualYield, setActualYield] = useState("");
 
+  // Lot selection modal state
+  type LotOption = { id: string; lotCode: string | null; productName: string; availableG: number; receivedAt: string; expiresAt: string | null; isDefault: boolean };
+  type IngredientLots = { ingredientId: string; ingredientName: string; neededG: number; lots: LotOption[] };
+  const [lotModal, setLotModal] = useState<{ batchId: string; ingredients: IngredientLots[] } | null>(null);
+  const [lotSelections, setLotSelections] = useState<Record<string, string>>({});
+  const [lotModalLoading, setLotModalLoading] = useState(false);
+
   const apiBase = resolveApiBase();
 
   const fetchData = useCallback(async () => {
@@ -138,8 +145,11 @@ export function BatchPrepBoard() {
     fetchData();
   }, [fetchData]);
 
+  const [mutationError, setMutationError] = useState<string | null>(null);
+
   const handleCreate = async () => {
     if (!newComponentId || !newRawInputG) return;
+    setMutationError(null);
     try {
       const res = await fetch(`${apiBase}/v1/batches`, {
         method: "POST",
@@ -157,17 +167,24 @@ export function BatchPrepBoard() {
         setNewRawInputG("");
         setNewPortionSizeG("");
         fetchData();
+      } else {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        setMutationError(body.error || body.details?.formErrors?.[0] || `Create failed (${res.status})`);
       }
-    } catch {
-      // silent
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : "Network error creating batch");
     }
   };
 
-  const handleAdvance = async (batchId: string, newStatus: string) => {
+  const executeAdvance = async (batchId: string, newStatus: string, overrides?: { ingredientId: string; lotId: string }[]) => {
     const body: Record<string, unknown> = { status: newStatus };
     if (newStatus === "PORTIONED" && actualYield) {
       body.actualYieldG = parseFloat(actualYield);
     }
+    if (overrides && overrides.length > 0) {
+      body.lotOverrides = overrides;
+    }
+    setMutationError(null);
     try {
       const res = await fetch(`${apiBase}/v1/batches/${batchId}/status`, {
         method: "PATCH",
@@ -177,11 +194,48 @@ export function BatchPrepBoard() {
       if (res.ok) {
         setAdvancingId(null);
         setActualYield("");
+        setLotModal(null);
+        setLotSelections({});
         fetchData();
+      } else {
+        const errBody = await res.json().catch(() => ({ error: res.statusText }));
+        setMutationError(errBody.error || `Advance failed (${res.status})`);
       }
-    } catch {
-      // silent
+    } catch (err) {
+      setMutationError(err instanceof Error ? err.message : "Network error advancing batch");
     }
+  };
+
+  const handleAdvance = async (batchId: string, newStatus: string) => {
+    // Show lot selection modal when advancing to IN_PREP
+    if (newStatus === "IN_PREP") {
+      setLotModalLoading(true);
+      try {
+        const res = await fetch(`${apiBase}/v1/batches/${batchId}/available-lots`, { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          const ingredients: IngredientLots[] = data.ingredients ?? [];
+          // Only show modal if there are multiple lot choices for any ingredient
+          const hasChoices = ingredients.some((ing) => ing.lots.length > 1);
+          if (hasChoices) {
+            // Pre-select defaults (FIFO — first lot)
+            const defaults: Record<string, string> = {};
+            for (const ing of ingredients) {
+              if (ing.lots.length > 0) defaults[ing.ingredientId] = ing.lots[0]!.id;
+            }
+            setLotSelections(defaults);
+            setLotModal({ batchId, ingredients });
+            setLotModalLoading(false);
+            return;
+          }
+        }
+      } catch {
+        // If lot fetch fails, proceed with FIFO
+      }
+      setLotModalLoading(false);
+    }
+    // No lot selection needed — proceed directly
+    await executeAdvance(batchId, newStatus);
   };
 
   if (loading) {
@@ -261,6 +315,34 @@ export function BatchPrepBoard() {
               Dismiss
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Mutation error banner */}
+      {mutationError && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "var(--sp-3)",
+            padding: "var(--sp-3) var(--sp-4)",
+            marginBottom: "var(--sp-4)",
+            background: "var(--c-danger-soft)",
+            color: "var(--c-danger)",
+            border: "1px solid rgba(239,68,68,0.3)",
+            borderRadius: "var(--r-md)",
+            fontSize: "var(--text-sm)",
+          }}
+        >
+          <span>{mutationError}</span>
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ color: "var(--c-danger)" }}
+            onClick={() => setMutationError(null)}
+          >
+            Dismiss
+          </button>
         </div>
       )}
 
@@ -450,6 +532,128 @@ export function BatchPrepBoard() {
                 disabled={!newComponentId || !newRawInputG}
               >
                 Create Batch
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Lot selection modal */}
+      {lotModal && (
+        <div
+          style={{
+            position: "fixed", inset: 0, zIndex: 1000,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "rgba(0,0,0,0.5)", padding: "var(--sp-4)",
+          }}
+          onClick={() => setLotModal(null)}
+        >
+          <div
+            style={{
+              background: "var(--c-surface, #fff)", borderRadius: "var(--r-lg, 12px)",
+              padding: "var(--sp-5, 24px)", maxWidth: 560, width: "100%",
+              maxHeight: "80vh", overflow: "auto",
+              boxShadow: "0 8px 32px rgba(0,0,0,0.2)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: "0 0 var(--sp-3) 0", fontSize: "var(--text-lg, 18px)" }}>
+              Select Lots for Prep
+            </h3>
+            <p style={{ margin: "0 0 var(--sp-4) 0", fontSize: "var(--text-sm)", color: "var(--c-ink-muted)" }}>
+              Choose which inventory lots to use for each ingredient. Default is FIFO (oldest first).
+            </p>
+
+            {lotModal.ingredients.map((ing) => (
+              <div key={ing.ingredientId} style={{ marginBottom: "var(--sp-4)" }}>
+                <div style={{
+                  fontWeight: 600, fontSize: "var(--text-sm)",
+                  marginBottom: "var(--sp-2)",
+                }}>
+                  {ing.ingredientName}
+                  <span style={{ color: "var(--c-ink-muted)", fontWeight: 400, marginLeft: "var(--sp-2)" }}>
+                    (need {Math.round(ing.neededG)}g)
+                  </span>
+                </div>
+                {ing.lots.length === 0 ? (
+                  <div style={{ fontSize: "var(--text-xs)", color: "var(--c-danger)" }}>
+                    No lots available!
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-1)" }}>
+                    {ing.lots.map((lot) => (
+                      <label
+                        key={lot.id}
+                        style={{
+                          display: "flex", alignItems: "center", gap: "var(--sp-2)",
+                          padding: "var(--sp-2) var(--sp-3)",
+                          borderRadius: "var(--r-md, 8px)",
+                          border: lotSelections[ing.ingredientId] === lot.id
+                            ? "2px solid var(--c-primary, #4f46e5)"
+                            : "1px solid var(--c-border, #e5e7eb)",
+                          cursor: "pointer",
+                          fontSize: "var(--text-sm)",
+                          background: lotSelections[ing.ingredientId] === lot.id
+                            ? "var(--c-primary-soft, rgba(79,70,229,0.05))"
+                            : "transparent",
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name={`lot-${ing.ingredientId}`}
+                          checked={lotSelections[ing.ingredientId] === lot.id}
+                          onChange={() => setLotSelections((prev) => ({ ...prev, [ing.ingredientId]: lot.id }))}
+                        />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 500 }}>
+                            {lot.productName}
+                            {lot.lotCode && <span style={{ color: "var(--c-ink-muted)", marginLeft: 4 }}>({lot.lotCode})</span>}
+                          </div>
+                          <div style={{ fontSize: "var(--text-xs)", color: "var(--c-ink-muted)" }}>
+                            {Math.round(lot.availableG)}g available
+                            {" \u00b7 "}Rcvd {lot.receivedAt}
+                            {lot.expiresAt && ` \u00b7 Exp ${lot.expiresAt}`}
+                            {lot.isDefault && (
+                              <span style={{ color: "var(--c-primary)", marginLeft: 4, fontWeight: 600 }}>FIFO</span>
+                            )}
+                          </div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+
+            <div style={{ display: "flex", gap: "var(--sp-2)", justifyContent: "flex-end", marginTop: "var(--sp-3)" }}>
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={() => { setLotModal(null); setLotSelections({}); }}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={() => {
+                  // Use defaults — proceed without overrides
+                  setLotModal(null);
+                  setLotSelections({});
+                  executeAdvance(lotModal.batchId, "IN_PREP");
+                }}
+              >
+                Use Defaults (FIFO)
+              </button>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => {
+                  const overrides = Object.entries(lotSelections).map(([ingredientId, lotId]) => ({
+                    ingredientId,
+                    lotId,
+                  }));
+                  executeAdvance(lotModal.batchId, "IN_PREP", overrides);
+                }}
+              >
+                Start Prep with Selected Lots
               </button>
             </div>
           </div>

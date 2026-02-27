@@ -37,14 +37,36 @@ export function parseInstacartOrders(filePath: string, options: ParseInstacartOr
         pickString(row, ["nutrient_source_type"])
       );
 
+      // Sanitize gramsPerUnit: must be positive, cap at 50kg as sanity limit
+      const sanitizedGramsPerUnit = Number.isFinite(gramsPerUnit) && gramsPerUnit > 0
+        ? Math.min(gramsPerUnit, 50_000)
+        : 1000; // Default 1000g for unknown items
+
+      // Sanitize nutrient hints: reject negative values
+      const rawNutrients = {
+        kcal: pickNumberOrNull(row, ["kcal_per_100g"]),
+        proteinG: pickNumberOrNull(row, ["protein_g_per_100g"]),
+        carbG: pickNumberOrNull(row, ["carb_g_per_100g"]),
+        fatG: pickNumberOrNull(row, ["fat_g_per_100g"]),
+        sodiumMg: pickNumberOrNull(row, ["sodium_mg_per_100g"])
+      };
+      // Clamp negative nutrient values to null (invalid data)
+      const nutrientHints = {
+        kcal: rawNutrients.kcal !== null && rawNutrients.kcal >= 0 ? rawNutrients.kcal : null,
+        proteinG: rawNutrients.proteinG !== null && rawNutrients.proteinG >= 0 ? rawNutrients.proteinG : null,
+        carbG: rawNutrients.carbG !== null && rawNutrients.carbG >= 0 ? rawNutrients.carbG : null,
+        fatG: rawNutrients.fatG !== null && rawNutrients.fatG >= 0 ? rawNutrients.fatG : null,
+        sodiumMg: rawNutrients.sodiumMg !== null && rawNutrients.sodiumMg >= 0 ? rawNutrients.sodiumMg : null,
+      };
+
       return {
         orderedAt,
         productName,
         brand: pickString(row, ["brand", "Brand Name", "brand_name", "brand"]) || null,
         upc: pickString(row, ["upc", "UPC", "Item ID", "item_id"]) || null,
-        qty: Number.isFinite(qty) ? qty : 1,
+        qty: Number.isFinite(qty) && qty > 0 ? qty : 1,
         unit,
-        gramsPerUnit: Number.isFinite(gramsPerUnit) ? gramsPerUnit : 1000,
+        gramsPerUnit: sanitizedGramsPerUnit,
         lotCode: pickString(row, ["lot_code"]) || null,
         expiresAt,
         ingredientKeyHint: pickString(row, ["ingredient_key"]) || null,
@@ -53,13 +75,7 @@ export function parseInstacartOrders(filePath: string, options: ParseInstacartOr
         lineTotalUsd: pickNumberOrNull(row, ["line_total_usd", "Line Total ($)", "unit_cost_total"]),
         nutrientSourceTypeHint: nutrientSourceType,
         nutrientSourceRefHint: pickString(row, ["nutrient_source_ref"]) || null,
-        nutrientHints: {
-          kcal: pickNumberOrNull(row, ["kcal_per_100g"]),
-          proteinG: pickNumberOrNull(row, ["protein_g_per_100g"]),
-          carbG: pickNumberOrNull(row, ["carb_g_per_100g"]),
-          fatG: pickNumberOrNull(row, ["fat_g_per_100g"]),
-          sodiumMg: pickNumberOrNull(row, ["sodium_mg_per_100g"])
-        }
+        nutrientHints,
       } satisfies InstacartOrderRow;
     })
     .filter((x): x is InstacartOrderRow => x !== null);

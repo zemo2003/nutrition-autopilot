@@ -6,3 +6,8 @@ export * from "./plausibility.js";
 export * from "./usda-mapping.js";
 export * from "./consensus.js";
 export * from "./yield-factors.js";
+export * from "./biometrics-engine.js";
+export * from "./metrics-engine.js";
+export * from "./nutrition-aggregator.js";
+export * from "./tdee-engine.js";
+export * from "./data-completeness.js";

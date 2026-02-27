@@ -91,10 +91,12 @@ export function ScientificQABoard() {
   const [staleLabels, setStaleLabels] = useState<StaleLabel[]>([]);
   const [tasks, setTasks] = useState<VerificationTask[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const apiBase = resolveApiBase();
 
   const fetchData = useCallback(async () => {
+    setFetchError(null);
     const month = new Date().toISOString().slice(0, 7);
     try {
       const [qualityRes, staleRes, tasksRes] = await Promise.all([
@@ -111,8 +113,11 @@ export function ScientificQABoard() {
         const taskData = await tasksRes.json();
         setTasks(taskData.tasks ?? []);
       }
-    } catch {
-      // silent
+      if (!qualityRes.ok && !staleRes.ok && !tasksRes.ok) {
+        setFetchError("Failed to load QA data — check that the API is running.");
+      }
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : "Network error loading QA data");
     } finally {
       setLoading(false);
     }
@@ -124,6 +129,36 @@ export function ScientificQABoard() {
 
   if (loading) {
     return <div className="loading-shimmer" style={{ height: 300, borderRadius: 12 }} />;
+  }
+
+  if (fetchError) {
+    return (
+      <div className="card" style={{ padding: "var(--sp-4)" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "var(--sp-3)",
+            padding: "var(--sp-3) var(--sp-4)",
+            background: "var(--c-danger-soft)",
+            color: "var(--c-danger)",
+            border: "1px solid rgba(239,68,68,0.3)",
+            borderRadius: "var(--r-md)",
+            fontSize: "var(--text-sm)",
+          }}
+        >
+          <span>{fetchError}</span>
+          <button
+            className="btn btn-sm"
+            style={{ background: "var(--c-danger)", color: "#fff" }}
+            onClick={() => { setLoading(true); fetchData(); }}
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (

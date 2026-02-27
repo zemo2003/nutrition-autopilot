@@ -128,6 +128,7 @@ export default async function CalendarPage({
               Export XLSX
             </a>
           )}
+          <Link href={`/clients/${clientId}/nutrition` as any} className="btn btn-outline">Nutrition</Link>
           <Link href="/" className="btn btn-outline">Dashboard</Link>
         </div>
       </div>

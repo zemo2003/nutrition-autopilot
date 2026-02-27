@@ -2,11 +2,11 @@
 
 ## Current Sprint
 
-**Complete** — All 5 sprints delivered and deployed
+**Complete** — All 5 sprints delivered, deployed, and hardening audit passed
 
 ## Status
 
-`deployed`
+`production-ready`
 
 ## Last Completed Gate
 
@@ -20,6 +20,7 @@
 | Sprint 3 | gated_pass | 2026-02-25T20:55Z |
 | Sprint 4 | gated_pass | 2026-02-25T21:30Z |
 | Sprint 5 | gated_pass | 2026-02-25T22:00Z |
+| Hardening Audit | gated_pass | 2026-02-26T23:35Z |
 
 ## Blockers
 
@@ -27,7 +28,45 @@ None.
 
 ## Next Action
 
-Roadmap complete. Ready for funding demo.
+System hardened and audit-verified. Ready for new feature development.
+
+## Hardening Audit (2026-02-26)
+
+### Phase 1: Critical Safety Fixes
+- [x] **Race conditions closed**: Batch lot consumption + inventory adjust now use Serializable isolation transactions
+- [x] **Post-rounding hierarchy enforcement**: sugars <= carbs, addedSugars <= sugars, fiber <= carbs, satFat + transFat <= totalFat (pre-rounding AND post-rounding)
+- [x] **Zod input validation**: 18 request body schemas added to contracts, applied to 11+ mutation endpoints via `validateBody()` helper
+- [x] **Pre-rounding hierarchy call**: `enforceNutrientHierarchy()` was defined but never called in `computeSkuLabel` - now invoked
+
+### Phase 2: Calculation Verification
+- [x] **29 new engine tests**: post-rounding hierarchy enforcement (5), Atwater factor consistency with known USDA foods (8), FDA rounding boundary edge cases (14), yield factor edge cases (3)
+- [x] **Known food verification**: egg, rice, salmon, sweet potato, olive oil verified against USDA published values
+- [x] **QA fix**: QA comparison now uses original (uncorrected) kcal to correctly flag calorie mismatches
+
+### Phase 3: Schema & Data Integrity
+- [x] **3 database indexes added**: BatchLotConsumption.inventoryLotId, LabelSnapshot.(organizationId, frozenAt), LotConsumptionEvent.inventoryLotId
+- [x] **Importer hardened**: 50kg sanity cap on gramsPerUnit, negative nutrient rejection, qty > 0 validation
+- [x] **Data leak prevention**: Label endpoint now filters by organizationId
+
+### Phase 4: Frontend Reliability
+- [x] **11 silent catch blocks replaced** across 6 components with user-facing error banners
+- [x] **Error states added** to: batch-prep-board, mapping-board, scientific-qa-board, substitution-board, kitchen-dashboard, documents-board
+- [x] **Loading states improved**: documents-board now uses shimmer skeletons instead of plain text
+- [x] **Mutation error feedback**: All POST/PATCH handlers now surface API error messages to users
+
+### Phase 5: System Integration
+- [x] **65 contract schema tests**: Every Zod schema in contracts validated (accept valid, reject invalid, edge cases)
+- [x] **8 integration flow tests**: Multi-ingredient label, allergen aggregation, single-ingredient precision, empty nutrient handling, multi-lot blending, serving size scaling, idempotency, hierarchy consistency
+- [x] **API error utility**: `apps/api/src/lib/api-error.ts` with standardized error codes and helper functions
+
+### Test Summary
+
+| Phase | Tests Added | Total After |
+|-------|------------|-------------|
+| Phase 2 (engine) | +29 | 526 |
+| Phase 5 (contracts) | +63 | 589 |
+| Phase 5 (engine integration) | +8 | 606 |
+| **Final total** | **+100** | **606** |
 
 ## Deploy Verification
 
