@@ -1248,17 +1248,13 @@ v1Router.get("/clients/:clientId/nutrition/weekly", async (req, res) => {
     orderBy: { servedAt: "asc" }
   });
 
-  // Build recipe-based macro estimates for events missing a label snapshot
-  const unlabeledSkuIds = [...new Set(
-    events
-      .filter((e) => !e.finalLabelSnapshot && e.skuId)
-      .map((e) => e.skuId!)
-  )];
+  // Build recipe-based macro estimates as fallback for missing/empty labels
+  const allSkuIds = [...new Set(events.filter((e) => e.skuId).map((e) => e.skuId!))];
 
-  const recipeEstimates = new Map<string, { kcal: number; proteinG: number; carbG: number; fatG: number; fiberG: number }>();
-  if (unlabeledSkuIds.length > 0) {
+  const recipeEstimates = new Map<string, { proteinG: number; carbG: number; fatG: number; fiberG: number }>();
+  if (allSkuIds.length > 0) {
     const recipes = await prisma.recipe.findMany({
-      where: { skuId: { in: unlabeledSkuIds }, active: true },
+      where: { skuId: { in: allSkuIds }, active: true },
       include: {
         lines: {
           include: {
@@ -1278,20 +1274,18 @@ v1Router.get("/clients/:clientId/nutrition/weekly", async (req, res) => {
       }
     });
     for (const recipe of recipes) {
-      let kcal = 0, prot = 0, carb = 0, fat = 0, fiber = 0;
+      let prot = 0, carb = 0, fat = 0, fiber = 0;
       for (const line of recipe.lines) {
         const product = line.ingredient.products[0];
         if (!product) continue;
-        const nMap = new Map(product.nutrients.map((n) => [n.nutrientDefinition.key, n.valuePer100g]));
+        const nMap = new Map<string, number | null>(product.nutrients.map((n) => [n.nutrientDefinition.key, n.valuePer100g]));
         const g = line.targetGPerServing;
-        kcal += ((nMap.get("kcal") ?? 0) * g) / 100;
         prot += ((nMap.get("protein_g") ?? 0) * g) / 100;
         carb += ((nMap.get("carb_g") ?? 0) * g) / 100;
         fat += ((nMap.get("fat_g") ?? 0) * g) / 100;
         fiber += ((nMap.get("fiber_g") ?? 0) * g) / 100;
       }
       recipeEstimates.set(recipe.skuId, {
-        kcal: Math.round(kcal),
         proteinG: Math.round(prot),
         carbG: Math.round(carb),
         fatG: Math.round(fat),
@@ -1327,19 +1321,18 @@ v1Router.get("/clients/:clientId/nutrition/weekly", async (req, res) => {
 
     const label = e.finalLabelSnapshot?.renderPayload as Record<string, unknown> | null;
     const fda = (label?.roundedFda ?? {}) as Record<string, number>;
-    let kcal = fda.calories ?? 0;
     let prot = fda.proteinG ?? 0;
     let carb = fda.carbG ?? 0;
     let fat = fda.fatG ?? 0;
     let fiber = fda.fiberG ?? 0;
     let estimated = false;
 
-    // Fallback: estimate from recipe when label freeze failed
-    if (!e.finalLabelSnapshot && e.skuId) {
+    // Fallback: estimate from recipe when label is missing or has all-zero macros
+    const labelEmpty = prot === 0 && carb === 0 && fat === 0;
+    if (labelEmpty && e.skuId) {
       const est = recipeEstimates.get(e.skuId);
       if (est) {
         const servings = e.mealSchedule.plannedServings;
-        kcal = Math.round(est.kcal * servings);
         prot = Math.round(est.proteinG * servings);
         carb = Math.round(est.carbG * servings);
         fat = Math.round(est.fatG * servings);
@@ -1347,6 +1340,9 @@ v1Router.get("/clients/:clientId/nutrition/weekly", async (req, res) => {
         estimated = true;
       }
     }
+
+    // Always derive kcal from macros (Atwater) for consistency
+    const kcal = Math.round(prot * 4 + carb * 4 + fat * 9);
 
     day.mealCount += 1;
     day.totalKcal += kcal;
