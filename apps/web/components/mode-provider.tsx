@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
 
 export type AppMode = "kitchen" | "science";
 
@@ -18,27 +18,16 @@ const ModeContext = createContext<ModeContextValue>({
   clearMode: () => {},
 });
 
-const STORAGE_KEY = "numen:mode";
-
 export function ModeProvider({ children }: { children: ReactNode }) {
+  // Always start with no mode — show landing page on every load
   const [mode, setModeState] = useState<AppMode | null>(null);
-  const [isLoaded, setIsLoaded] = useState(false);
-
-  useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === "kitchen" || stored === "science") {
-      setModeState(stored);
-    }
-    setIsLoaded(true);
-  }, []);
+  const isLoaded = true; // No async localStorage to wait for
 
   const setMode = useCallback((m: AppMode) => {
-    localStorage.setItem(STORAGE_KEY, m);
     setModeState(m);
   }, []);
 
   const clearMode = useCallback(() => {
-    localStorage.removeItem(STORAGE_KEY);
     setModeState(null);
   }, []);
 
