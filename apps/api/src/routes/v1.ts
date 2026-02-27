@@ -1248,8 +1248,60 @@ v1Router.get("/clients/:clientId/nutrition/weekly", async (req, res) => {
     orderBy: { servedAt: "asc" }
   });
 
+  // Build recipe-based macro estimates for events missing a label snapshot
+  const unlabeledSkuIds = [...new Set(
+    events
+      .filter((e) => !e.finalLabelSnapshot && e.skuId)
+      .map((e) => e.skuId!)
+  )];
+
+  const recipeEstimates = new Map<string, { kcal: number; proteinG: number; carbG: number; fatG: number; fiberG: number }>();
+  if (unlabeledSkuIds.length > 0) {
+    const recipes = await prisma.recipe.findMany({
+      where: { skuId: { in: unlabeledSkuIds }, active: true },
+      include: {
+        lines: {
+          include: {
+            ingredient: {
+              include: {
+                products: {
+                  where: { active: true },
+                  include: {
+                    nutrients: { include: { nutrientDefinition: true } }
+                  },
+                  take: 1
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+    for (const recipe of recipes) {
+      let kcal = 0, prot = 0, carb = 0, fat = 0, fiber = 0;
+      for (const line of recipe.lines) {
+        const product = line.ingredient.products[0];
+        if (!product) continue;
+        const nMap = new Map(product.nutrients.map((n) => [n.nutrientDefinition.key, n.valuePer100g]));
+        const g = line.targetGPerServing;
+        kcal += ((nMap.get("kcal") ?? 0) * g) / 100;
+        prot += ((nMap.get("protein_g") ?? 0) * g) / 100;
+        carb += ((nMap.get("carb_g") ?? 0) * g) / 100;
+        fat += ((nMap.get("fat_g") ?? 0) * g) / 100;
+        fiber += ((nMap.get("fiber_g") ?? 0) * g) / 100;
+      }
+      recipeEstimates.set(recipe.skuId, {
+        kcal: Math.round(kcal),
+        proteinG: Math.round(prot),
+        carbG: Math.round(carb),
+        fatG: Math.round(fat),
+        fiberG: Math.round(fiber)
+      });
+    }
+  }
+
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const dayMap = new Map<string, { date: string; dayOfWeek: string; mealCount: number; totalKcal: number; proteinG: number; carbG: number; fatG: number; fiberG: number; meals: { id: string; servedAt: Date; mealSlot: string; skuName: string; kcal: number; proteinG: number; carbG: number; fatG: number; fiberG: number }[] }>();
+  const dayMap = new Map<string, { date: string; dayOfWeek: string; mealCount: number; totalKcal: number; proteinG: number; carbG: number; fatG: number; fiberG: number; meals: { id: string; servedAt: Date; mealSlot: string; skuName: string; kcal: number; proteinG: number; carbG: number; fatG: number; fiberG: number; estimated: boolean }[] }>();
 
   // Initialize 7 days with zeroes
   for (let i = 6; i >= 0; i--) {
@@ -1275,11 +1327,26 @@ v1Router.get("/clients/:clientId/nutrition/weekly", async (req, res) => {
 
     const label = e.finalLabelSnapshot?.renderPayload as Record<string, unknown> | null;
     const fda = (label?.roundedFda ?? {}) as Record<string, number>;
-    const kcal = fda.calories ?? 0;
-    const prot = fda.proteinG ?? 0;
-    const carb = fda.carbG ?? 0;
-    const fat = fda.fatG ?? 0;
-    const fiber = fda.fiberG ?? 0;
+    let kcal = fda.calories ?? 0;
+    let prot = fda.proteinG ?? 0;
+    let carb = fda.carbG ?? 0;
+    let fat = fda.fatG ?? 0;
+    let fiber = fda.fiberG ?? 0;
+    let estimated = false;
+
+    // Fallback: estimate from recipe when label freeze failed
+    if (!e.finalLabelSnapshot && e.skuId) {
+      const est = recipeEstimates.get(e.skuId);
+      if (est) {
+        const servings = e.mealSchedule.plannedServings;
+        kcal = Math.round(est.kcal * servings);
+        prot = Math.round(est.proteinG * servings);
+        carb = Math.round(est.carbG * servings);
+        fat = Math.round(est.fatG * servings);
+        fiber = Math.round(est.fiberG * servings);
+        estimated = true;
+      }
+    }
 
     day.mealCount += 1;
     day.totalKcal += kcal;
@@ -1296,7 +1363,8 @@ v1Router.get("/clients/:clientId/nutrition/weekly", async (req, res) => {
       proteinG: prot,
       carbG: carb,
       fatG: fat,
-      fiberG: fiber
+      fiberG: fiber,
+      estimated
     });
   }
 
