@@ -146,20 +146,32 @@ function staleDaysLabel(days: number | null): string {
   return `${days}d ago`;
 }
 
-function biomarkerStatus(key: string, value: number): "normal" | "warning" | "critical" {
-  const thresholds: Record<string, { warn: [number, number]; crit: [number, number] }> = {
-    fasting_glucose: { warn: [100, 125], crit: [126, Infinity] },
-    hba1c: { warn: [5.7, 6.4], crit: [6.5, Infinity] },
-    ldl: { warn: [130, 159], crit: [160, Infinity] },
-    hdl: { warn: [0, 39], crit: [0, 0] },
-    triglycerides: { warn: [150, 199], crit: [200, Infinity] },
-    body_fat_pct: { warn: [25, 30], crit: [31, Infinity] },
-  };
-  const t = thresholds[key];
-  if (!t) return "normal";
-  if (value >= t.crit[0] && value <= t.crit[1]) return "critical";
-  if (value >= t.warn[0] && value <= t.warn[1]) return "warning";
-  return "normal";
+function statusColor(status: string): string {
+  if (status === "critical") return "var(--c-danger, #ef4444)";
+  if (status === "warning") return "var(--c-warning, #f59e0b)";
+  return "var(--c-success, #22c55e)";
+}
+
+function sourceIcon(metricKey: string): string {
+  if (metricKey.startsWith("cgm_")) return "📊";
+  if (["bmd_total", "android_fat_pct", "gynoid_fat_pct", "ag_ratio", "fat_mass_kg", "lean_mass_kg", "body_fat_pct", "bmi", "bone_mineral_content_kg", "fat_free_mass_kg", "vat_mass_lbs", "arm_fat_pct", "leg_fat_pct", "trunk_fat_pct"].includes(metricKey)) return "🦴";
+  if (["total_testosterone", "free_testosterone", "estrogen", "shbg", "vitamin_d", "ferritin", "crp", "albumin", "apob", "total_cholesterol", "hdl", "ldl", "triglycerides", "tsh", "free_t3", "creatinine", "tc_hdl_ratio", "tg_hdl_ratio", "remnant_cholesterol", "ldl_apob_ratio"].includes(metricKey)) return "🩸";
+  return "";
+}
+
+const METRIC_CATEGORIES: Record<string, { label: string; order: number }> = {
+  bloodwork: { label: "Bloodwork", order: 1 },
+  metabolic: { label: "Metabolic / CGM", order: 2 },
+  body_composition: { label: "Body Composition / DEXA", order: 3 },
+  cardiovascular: { label: "Cardiovascular", order: 4 },
+  other: { label: "Other", order: 5 },
+};
+
+function bmiContextLabel(bmi: number, bodyFatPct: number | null | undefined): string | null {
+  if (bodyFatPct == null) return null;
+  if (bmi >= 30 && bodyFatPct < 15) return "athletic build";
+  if (bmi >= 25 && bodyFatPct < 20) return "lean — muscle mass";
+  return null;
 }
 
 const RESEARCH_TYPES = [
@@ -217,8 +229,14 @@ export function ScienceDashboard({ counts, quality, clients }: Props) {
       if (weeklyRes.status === "fulfilled" && weeklyRes.value) setWeekly(weeklyRes.value);
       if (bioRes.status === "fulfilled" && bioRes.value) setBioSummary(bioRes.value);
       if (metricsRes.status === "fulfilled" && metricsRes.value) setMetrics(metricsRes.value.statuses ?? []);
-      if (docsRes.status === "fulfilled" && docsRes.value) setDocuments(Array.isArray(docsRes.value) ? docsRes.value : []);
-      if (snapshotsRes.status === "fulfilled") setBioSnapshots(Array.isArray(snapshotsRes.value) ? snapshotsRes.value : []);
+      if (docsRes.status === "fulfilled" && docsRes.value) {
+        const docData = docsRes.value;
+        setDocuments(Array.isArray(docData) ? docData : Array.isArray(docData?.documents) ? docData.documents : []);
+      }
+      if (snapshotsRes.status === "fulfilled") {
+        const snapData = snapshotsRes.value;
+        setBioSnapshots(Array.isArray(snapData) ? snapData : Array.isArray(snapData?.snapshots) ? snapData.snapshots : []);
+      }
       if (profileRes.status === "fulfilled" && profileRes.value) setClientProfile(profileRes.value);
     } catch { /* network failures are non-fatal */ }
     setLoading(false);
@@ -296,7 +314,10 @@ export function ScienceDashboard({ counts, quality, clients }: Props) {
               <span className="science-profile-kpi"><strong>{weightTrend.latestValue.toFixed(1)}</strong> kg</span>
             )}
             {bioSummary?.bmi != null && (
-              <span className="science-profile-kpi"><strong>{bioSummary.bmi.toFixed(1)}</strong> BMI</span>
+              <span className="science-profile-kpi"><strong>{bioSummary.bmi.toFixed(1)}</strong> BMI{(() => {
+                const ctx = bmiContextLabel(bioSummary.bmi, bfTrend?.latestValue);
+                return ctx ? <span style={{ fontSize: "var(--text-xs)", color: "var(--c-primary, #4f46e5)", marginLeft: 4 }}>({ctx})</span> : null;
+              })()}</span>
             )}
             {bfTrend?.latestValue != null && (
               <span className="science-profile-kpi"><strong>{bfTrend.latestValue.toFixed(1)}</strong>% BF</span>
@@ -355,10 +376,35 @@ export function ScienceDashboard({ counts, quality, clients }: Props) {
               );
             })}
           </div>
+        ) : bioSnapshots.length === 1 ? (
+          /* Single-snapshot fallback: show latest values as static cards */
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "var(--sp-3)" }}>
+            {([
+              { field: "weightKg" as const, label: "Weight", unit: "kg", color: "#6366f1" },
+              { field: "bodyFatPct" as const, label: "Body Fat", unit: "%", color: "#f59e0b" },
+              { field: "leanMassKg" as const, label: "Lean Mass", unit: "kg", color: "#34d399" },
+              { field: "restingHr" as const, label: "Resting HR", unit: "bpm", color: "#ef4444" },
+            ] as const).map(({ field, label, unit, color }) => {
+              const val = bioSnapshots[0]?.[field];
+              if (val == null) return null;
+              return (
+                <div key={field} style={{
+                  padding: "var(--sp-3)", background: "var(--c-surface, #fff)",
+                  borderRadius: "var(--r-md, 8px)", border: `2px solid ${color}20`,
+                }}>
+                  <div style={{ fontSize: "var(--text-xs)", color: "var(--c-ink-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "var(--sp-1)" }}>{label}</div>
+                  <div style={{ fontSize: "var(--text-lg)", fontWeight: 700 }}>
+                    {typeof val === "number" ? val.toFixed(field === "restingHr" ? 0 : 1) : val}
+                    <span style={{ fontWeight: 400, color: "var(--c-ink-muted)", fontSize: "var(--text-sm)", marginLeft: 2 }}>{unit}</span>
+                  </div>
+                  <div style={{ fontSize: "var(--text-xs)", color: "var(--c-ink-muted)", marginTop: 2 }}>1 snapshot — add more for trends</div>
+                </div>
+              );
+            }).filter(Boolean)}
+          </div>
         ) : (
           <div style={{ color: "var(--c-ink-muted)", fontSize: "var(--text-sm)" }}>
-            {bioSnapshots.length === 0 ? "No biometric snapshots recorded yet." : "Need at least 2 snapshots for trend visualization."}
-            {" "}
+            No biometric snapshots recorded yet.{" "}
             <Link href={clientId ? `/clients/${clientId}/biometrics` as any : "#"} style={{ color: "var(--c-primary, #4f46e5)", fontWeight: 600 }}>Add Snapshot →</Link>
           </div>
         )}
@@ -519,58 +565,276 @@ export function ScienceDashboard({ counts, quality, clients }: Props) {
         </section>
       ) : null}
 
-      {/* C. Biomarker Snapshot */}
+      {/* C. Biomarker Snapshot — Categorized */}
       <section className="section">
         <h2 className="section-title">Biomarker Snapshot</h2>
         {loading ? (
           <div className="loading-shimmer loading-block" style={{ height: 120 }} />
-        ) : metrics.length > 0 ? (
-          <div className="biomarker-grid">
-            {metrics.slice(0, 12).map((m) => {
-              const status = m.latestValue != null ? biomarkerStatus(m.metricKey, m.latestValue) : "normal";
-              return (
-                <div key={m.metricKey} className="biomarker-card">
-                  <div className="biomarker-card-label">{m.label}</div>
-                  <div className="biomarker-card-value">
-                    {m.latestValue != null ? m.latestValue : "—"}
-                    {m.latestUnit && <span className="biomarker-card-unit">{m.latestUnit}</span>}
+        ) : metrics.length > 0 ? (() => {
+          // Group metrics by category
+          const grouped: Record<string, MetricStatus[]> = {};
+          for (const m of metrics) {
+            const cat = m.category || "other";
+            if (!grouped[cat]) grouped[cat] = [];
+            grouped[cat]!.push(m);
+          }
+          // Add biometrics-derived values if not in metrics
+          if (weightTrend?.latestValue != null && !metrics.some((m) => m.metricKey === "weight_kg")) {
+            if (!grouped["body_composition"]) grouped["body_composition"] = [];
+            grouped["body_composition"]!.push({
+              metricKey: "weight_kg", label: "Weight", latestValue: weightTrend.latestValue,
+              latestUnit: "kg", latestObservedAt: null, rangeStatus: "normal", staleDays: bioSummary?.dataQuality.daysSinceLastSnapshot ?? null, category: "body_composition",
+            });
+          }
+
+          const sortedCategories = Object.entries(grouped)
+            .sort(([a], [b]) => (METRIC_CATEGORIES[a]?.order ?? 99) - (METRIC_CATEGORIES[b]?.order ?? 99));
+
+          // Count warnings/critical per category
+          const categoryWorst = (items: MetricStatus[]): "critical" | "warning" | "normal" => {
+            if (items.some((m) => m.rangeStatus === "critical")) return "critical";
+            if (items.some((m) => m.rangeStatus === "warning")) return "warning";
+            return "normal";
+          };
+
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
+              {sortedCategories.map(([cat, items]) => {
+                const worst = categoryWorst(items);
+                const catInfo = METRIC_CATEGORIES[cat];
+                const withValues = items.filter((m) => m.latestValue != null);
+                if (withValues.length === 0) return null;
+
+                return (
+                  <div key={cat}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)", marginBottom: "var(--sp-2)" }}>
+                      <span style={{ fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--c-ink)" }}>
+                        {catInfo?.label ?? cat.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
+                      </span>
+                      <span style={{
+                        fontSize: "var(--text-xs)", fontWeight: 600, padding: "1px 6px", borderRadius: 10,
+                        background: worst === "critical" ? "#fef2f2" : worst === "warning" ? "#fffbeb" : "#f0fdf4",
+                        color: statusColor(worst),
+                      }}>
+                        {withValues.length} metric{withValues.length !== 1 ? "s" : ""}
+                        {worst !== "normal" && ` · ${items.filter((m) => m.rangeStatus === worst).length} ${worst}`}
+                      </span>
+                    </div>
+                    <div className="biomarker-grid">
+                      {withValues.map((m) => {
+                        const icon = sourceIcon(m.metricKey);
+                        const bmiCtx = m.metricKey === "bmi" && m.latestValue != null
+                          ? bmiContextLabel(m.latestValue, bfTrend?.latestValue ?? metrics.find((x) => x.metricKey === "body_fat_pct")?.latestValue)
+                          : null;
+                        return (
+                          <div key={m.metricKey} className="biomarker-card" style={{
+                            borderLeft: m.rangeStatus !== "normal" && m.rangeStatus !== "unknown"
+                              ? `3px solid ${statusColor(m.rangeStatus)}` : undefined,
+                          }}>
+                            <div className="biomarker-card-label">
+                              {icon && <span style={{ marginRight: 4 }}>{icon}</span>}
+                              {m.label}
+                            </div>
+                            <div className="biomarker-card-value">
+                              {m.latestValue != null ? (Number.isInteger(m.latestValue) ? m.latestValue : m.latestValue.toFixed(m.latestValue < 10 ? 2 : 1)) : "—"}
+                              {m.latestUnit && <span className="biomarker-card-unit">{m.latestUnit}</span>}
+                            </div>
+                            {m.latestValue != null && m.rangeStatus !== "normal" && m.rangeStatus !== "unknown" && (
+                              <span className={`biomarker-status biomarker-status--${m.rangeStatus}`}>{m.rangeStatus}</span>
+                            )}
+                            {bmiCtx && (
+                              <div style={{ fontSize: "var(--text-xs)", color: "var(--c-primary, #4f46e5)", fontWeight: 500, marginTop: 2 }}>
+                                ({bmiCtx})
+                              </div>
+                            )}
+                            {m.staleDays != null && (
+                              <div className="biomarker-card-stale">{staleDaysLabel(m.staleDays)}</div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                  {m.latestValue != null && status !== "normal" && (
-                    <span className={`biomarker-status biomarker-status--${status}`}>{status}</span>
-                  )}
-                  {m.staleDays != null && (
-                    <div className="biomarker-card-stale">{staleDaysLabel(m.staleDays)}</div>
-                  )}
-                </div>
-              );
-            })}
-            {/* Show biometrics-derived values if no metric entries cover them */}
-            {weightTrend?.latestValue != null && !metrics.some((m) => m.metricKey === "weight_kg") && (
-              <div className="biomarker-card">
-                <div className="biomarker-card-label">Weight</div>
-                <div className="biomarker-card-value">{weightTrend.latestValue.toFixed(1)}<span className="biomarker-card-unit">kg</span></div>
-                {bioSummary?.dataQuality.daysSinceLastSnapshot != null && (
-                  <div className="biomarker-card-stale">{staleDaysLabel(bioSummary.dataQuality.daysSinceLastSnapshot)}</div>
-                )}
-              </div>
-            )}
-            {bfTrend?.latestValue != null && !metrics.some((m) => m.metricKey === "body_fat_pct") && (
-              <div className="biomarker-card">
-                <div className="biomarker-card-label">Body Fat</div>
-                <div className="biomarker-card-value">{bfTrend.latestValue.toFixed(1)}<span className="biomarker-card-unit">%</span></div>
-              </div>
-            )}
-            {hrTrend?.latestValue != null && !metrics.some((m) => m.metricKey === "resting_hr") && (
-              <div className="biomarker-card">
-                <div className="biomarker-card-label">Resting HR</div>
-                <div className="biomarker-card-value">{hrTrend.latestValue}<span className="biomarker-card-unit">bpm</span></div>
-              </div>
-            )}
-          </div>
-        ) : (
+                );
+              })}
+            </div>
+          );
+        })() : (
           <div style={{ color: "var(--c-ink-muted)", fontSize: "var(--text-sm)" }}>No biomarker data recorded yet.</div>
         )}
       </section>
+
+      {/* C2. CGM Summary Card */}
+      {metrics.some((m) => m.metricKey.startsWith("cgm_")) && (() => {
+        const cgm = (key: string) => metrics.find((m) => m.metricKey === key);
+        const inRange = cgm("cgm_time_in_range_pct")?.latestValue ?? 0;
+        const belowRange = cgm("cgm_time_below_range_pct")?.latestValue ?? 0;
+        const aboveRange = cgm("cgm_time_above_range_pct")?.latestValue ?? 0;
+        const avgGlucose = cgm("cgm_avg_glucose")?.latestValue;
+        const fastingGlucose = cgm("cgm_fasting_glucose_avg")?.latestValue;
+        const sdGlucose = cgm("cgm_stddev_glucose")?.latestValue;
+
+        return (
+          <section className="section">
+            <h2 className="section-title">📊 CGM Summary</h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+              {/* Time in range bar */}
+              <div>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--c-ink-muted)", marginBottom: 4, fontWeight: 600 }}>Time in Range Distribution</div>
+                <div style={{ display: "flex", height: 28, borderRadius: 6, overflow: "hidden", border: "1px solid var(--c-border, #e5e7eb)" }}>
+                  {belowRange > 0 && (
+                    <div style={{ width: `${belowRange}%`, background: "#ef4444", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 10, fontWeight: 700 }}>
+                      {belowRange}%
+                    </div>
+                  )}
+                  {inRange > 0 && (
+                    <div style={{ width: `${inRange}%`, background: "#22c55e", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 10, fontWeight: 700 }}>
+                      {inRange}%
+                    </div>
+                  )}
+                  {aboveRange > 0 && (
+                    <div style={{ width: `${Math.max(aboveRange, 3)}%`, background: "#f59e0b", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 10, fontWeight: 700 }}>
+                      {aboveRange}%
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--c-ink-muted)", marginTop: 4 }}>
+                  <span style={{ color: "#ef4444" }}>◼ Below {belowRange}%</span>
+                  <span style={{ color: "#22c55e" }}>◼ In Range {inRange}%</span>
+                  <span style={{ color: "#f59e0b" }}>◼ Above {aboveRange}%</span>
+                </div>
+              </div>
+              {/* KPIs */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "var(--sp-2)" }}>
+                {avgGlucose != null && <div className="kpi"><div className="kpi-value">{avgGlucose}</div><div className="kpi-label">Avg Glucose (mg/dL)</div></div>}
+                {fastingGlucose != null && <div className="kpi"><div className="kpi-value">{fastingGlucose}</div><div className="kpi-label">Fasting Glucose (mg/dL)</div></div>}
+                {sdGlucose != null && <div className="kpi"><div className="kpi-value">{sdGlucose}</div><div className="kpi-label">Variability (SD)</div></div>}
+              </div>
+              {/* Alert */}
+              {belowRange > 4 && (
+                <div style={{
+                  padding: "var(--sp-2) var(--sp-3)", borderRadius: "var(--r-md, 8px)",
+                  background: belowRange > 15 ? "#fef2f2" : "#fffbeb",
+                  border: `1px solid ${belowRange > 15 ? "#fecaca" : "#fde68a"}`,
+                  fontSize: "var(--text-sm)", color: belowRange > 15 ? "#dc2626" : "#d97706",
+                }}>
+                  ⚠️ {belowRange}% time below range — {belowRange > 15 ? "significant hypoglycemia; evaluate meal timing and carbohydrate intake" : "mild hypoglycemia; monitor patterns"}
+                </div>
+              )}
+            </div>
+          </section>
+        );
+      })()}
+
+      {/* C3. Bloodwork Panel Card */}
+      {metrics.some((m) => m.category === "bloodwork" && m.latestValue != null) && (() => {
+        const bm = (key: string) => metrics.find((m) => m.metricKey === key);
+        const lipidKeys = ["total_cholesterol", "hdl", "ldl", "triglycerides", "apob", "remnant_cholesterol", "tc_hdl_ratio", "tg_hdl_ratio", "ldl_apob_ratio"];
+        const hormoneKeys = ["total_testosterone", "free_testosterone", "estrogen", "shbg", "tsh", "free_t3"];
+        const generalKeys = ["crp", "creatinine", "albumin", "ferritin", "vitamin_d"];
+
+        const renderGroup = (title: string, keys: string[]) => {
+          const items = keys.map((k) => bm(k)).filter((m): m is MetricStatus => m != null && m.latestValue != null);
+          if (items.length === 0) return null;
+          return (
+            <div key={title}>
+              <div style={{ fontSize: "var(--text-xs)", fontWeight: 700, color: "var(--c-ink-muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "var(--sp-1)" }}>{title}</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--sp-2)" }}>
+                {items.map((m) => (
+                  <div key={m.metricKey} style={{
+                    display: "flex", alignItems: "center", gap: 6, fontSize: "var(--text-sm)",
+                    padding: "4px 10px", borderRadius: 6,
+                    background: m.rangeStatus === "critical" ? "#fef2f2" : m.rangeStatus === "warning" ? "#fffbeb" : "var(--c-surface-raised, #f8f9fa)",
+                  }}>
+                    <span style={{
+                      width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
+                      background: statusColor(m.rangeStatus),
+                    }} />
+                    <span style={{ fontWeight: 500 }}>{m.label}</span>
+                    <span style={{ fontWeight: 700 }}>{m.latestValue}{m.latestUnit ? ` ${m.latestUnit}` : ""}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        };
+
+        return (
+          <section className="section">
+            <h2 className="section-title">🩸 Bloodwork Panel</h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+              {renderGroup("Lipid Panel", lipidKeys)}
+              {renderGroup("Hormones", hormoneKeys)}
+              {renderGroup("General / Inflammation", generalKeys)}
+            </div>
+          </section>
+        );
+      })()}
+
+      {/* C4. DEXA Summary Card */}
+      {metrics.some((m) => ["body_fat_pct", "lean_mass_kg", "bmd_total"].includes(m.metricKey) && m.latestValue != null) && (() => {
+        const dm = (key: string) => metrics.find((m) => m.metricKey === key)?.latestValue ?? null;
+        const bodyFat = dm("body_fat_pct");
+        const leanMass = dm("lean_mass_kg");
+        const fatMass = dm("fat_mass_kg");
+        const bmd = dm("bmd_total");
+        const agRatio = dm("ag_ratio");
+        const androidFat = dm("android_fat_pct");
+        const gynoidFat = dm("gynoid_fat_pct");
+        const bmiVal = dm("bmi");
+        const bmiCtx = bmiVal != null ? bmiContextLabel(bmiVal, bodyFat) : null;
+
+        return (
+          <section className="section">
+            <h2 className="section-title">🦴 DEXA Body Composition</h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+              {/* Body composition bar */}
+              {bodyFat != null && leanMass != null && (
+                <div>
+                  <div style={{ fontSize: "var(--text-xs)", color: "var(--c-ink-muted)", marginBottom: 4, fontWeight: 600 }}>Composition Breakdown</div>
+                  <div style={{ display: "flex", height: 28, borderRadius: 6, overflow: "hidden", border: "1px solid var(--c-border, #e5e7eb)" }}>
+                    {fatMass != null && leanMass != null && (() => {
+                      const totalMass = (fatMass ?? 0) + leanMass;
+                      const fatPct = totalMass > 0 ? ((fatMass ?? 0) / totalMass) * 100 : 0;
+                      const leanPct = totalMass > 0 ? (leanMass / totalMass) * 100 : 0;
+                      return (
+                        <>
+                          <div style={{ width: `${leanPct}%`, background: "#34d399", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 10, fontWeight: 700 }}>
+                            Lean {leanMass}kg
+                          </div>
+                          <div style={{ width: `${fatPct}%`, background: "#f59e0b", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 10, fontWeight: 700 }}>
+                            Fat {fatMass}kg
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
+              {/* KPIs */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: "var(--sp-2)" }}>
+                {bodyFat != null && <div className="kpi"><div className="kpi-value">{bodyFat}%</div><div className="kpi-label">Body Fat</div></div>}
+                {leanMass != null && <div className="kpi"><div className="kpi-value">{leanMass}kg</div><div className="kpi-label">Lean Mass</div></div>}
+                {bmiVal != null && (
+                  <div className="kpi">
+                    <div className="kpi-value">{bmiVal}</div>
+                    <div className="kpi-label">BMI{bmiCtx ? ` (${bmiCtx})` : ""}</div>
+                  </div>
+                )}
+                {bmd != null && <div className="kpi"><div className="kpi-value">{bmd}</div><div className="kpi-label">BMD (g/cm²)</div></div>}
+              </div>
+              {/* Regional breakdown */}
+              {(androidFat != null || gynoidFat != null || agRatio != null) && (
+                <div style={{ fontSize: "var(--text-sm)", display: "flex", gap: "var(--sp-3)", flexWrap: "wrap" }}>
+                  {androidFat != null && <span>Android (trunk): <strong>{androidFat}%</strong></span>}
+                  {gynoidFat != null && <span>Gynoid (hip): <strong>{gynoidFat}%</strong></span>}
+                  {agRatio != null && <span>A/G Ratio: <strong>{agRatio}</strong>{agRatio < 0.8 ? " ✓ favorable" : agRatio > 1.0 ? " ⚠️ elevated" : ""}</span>}
+                </div>
+              )}
+            </div>
+          </section>
+        );
+      })()}
 
       {/* D. Research Data Links */}
       <section className="section">

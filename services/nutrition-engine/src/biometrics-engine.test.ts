@@ -8,6 +8,8 @@ import {
   generateBiometricSummary,
   computeBMI,
   classifyBMI,
+  classifyBMIWithContext,
+  computeBodyCompositionSeries,
   type BiometricDataPoint,
 } from "./biometrics-engine.js";
 
@@ -212,6 +214,11 @@ describe("biometrics-engine", () => {
       expect(computeBMI(175, 80)).toBe(26.1);
     });
 
+    it("computes Alex's BMI correctly", () => {
+      // 88.5 / (1.803)^2 = 27.2
+      expect(computeBMI(180.3, 88.5)).toBe(27.2);
+    });
+
     it("returns null for invalid height", () => {
       expect(computeBMI(0, 80)).toBeNull();
       expect(computeBMI(-10, 80)).toBeNull();
@@ -250,6 +257,103 @@ describe("biometrics-engine", () => {
 
     it("boundary: 30 is obese", () => {
       expect(classifyBMI(30)).toBe("obese");
+    });
+  });
+
+  // ─── classifyBMIWithContext ────────────────────────────────────────────────
+
+  describe("classifyBMIWithContext", () => {
+    it("standard overweight without body fat data", () => {
+      const result = classifyBMIWithContext(27.2);
+      expect(result.category).toBe("overweight");
+      expect(result.context).toBeUndefined();
+    });
+
+    it("muscular athlete: BMI 27.2, body fat 10.7%", () => {
+      const result = classifyBMIWithContext(27.2, 10.7);
+      expect(result.category).toBe("overweight");
+      expect(result.context).toContain("muscle mass");
+      expect(result.context).toContain("lean");
+    });
+
+    it("muscular athlete: BMI 28, body fat 15%", () => {
+      const result = classifyBMIWithContext(28, 15);
+      expect(result.category).toBe("overweight");
+      expect(result.context).toContain("muscle mass");
+    });
+
+    it("true overweight: BMI 28, body fat 28%", () => {
+      const result = classifyBMIWithContext(28, 28);
+      expect(result.category).toBe("overweight");
+      expect(result.context).toBeUndefined(); // no special context
+    });
+
+    it("heavy athlete: BMI 31, body fat 12%", () => {
+      const result = classifyBMIWithContext(31, 12);
+      expect(result.category).toBe("obese");
+      expect(result.context).toContain("athletic build");
+    });
+
+    it("true obese: BMI 35, body fat 38%", () => {
+      const result = classifyBMIWithContext(35, 38);
+      expect(result.category).toBe("obese");
+      expect(result.context).toContain("excess adiposity");
+    });
+
+    it("normal BMI with null body fat", () => {
+      const result = classifyBMIWithContext(22, null);
+      expect(result.category).toBe("normal");
+      expect(result.context).toBeUndefined();
+    });
+
+    it("underweight with body fat data", () => {
+      const result = classifyBMIWithContext(17, 8);
+      expect(result.category).toBe("underweight");
+      // No special context for underweight
+      expect(result.context).toBeUndefined();
+    });
+
+    it("normal BMI regardless of body fat", () => {
+      const result = classifyBMIWithContext(23, 15);
+      expect(result.category).toBe("normal");
+      expect(result.context).toBeUndefined();
+    });
+  });
+
+  // ─── computeBodyCompositionSeries ─────────────────────────────────────────
+
+  describe("computeBodyCompositionSeries", () => {
+    it("derives fat mass from weight × body fat pct", () => {
+      const snaps = [dp(0, { weightKg: 88.5, bodyFatPct: 10.7 })];
+      const series = computeBodyCompositionSeries(snaps);
+      expect(series.length).toBe(1);
+      expect(series[0]!.fatMassKg).toBeCloseTo(9.5, 0); // 88.5 * 0.107 ≈ 9.47
+    });
+
+    it("derives lean mass when not provided", () => {
+      const snaps = [dp(0, { weightKg: 88.5, bodyFatPct: 10.7, leanMassKg: null })];
+      const series = computeBodyCompositionSeries(snaps);
+      expect(series[0]!.leanMassKg).toBeCloseTo(79.0, 0); // 88.5 - 9.47
+    });
+
+    it("keeps provided lean mass", () => {
+      const snaps = [dp(0, { weightKg: 88.5, bodyFatPct: 10.7, leanMassKg: 74.7 })];
+      const series = computeBodyCompositionSeries(snaps);
+      expect(series[0]!.leanMassKg).toBe(74.7);
+    });
+
+    it("handles snapshot with only weight", () => {
+      const snaps = [dp(0, { weightKg: 80, bodyFatPct: null, leanMassKg: null })];
+      const series = computeBodyCompositionSeries(snaps);
+      expect(series.length).toBe(1);
+      expect(series[0]!.weightKg).toBe(80);
+      expect(series[0]!.fatMassKg).toBeNull();
+    });
+
+    it("filters out snapshots with no relevant data", () => {
+      const snaps = [dp(0, { weightKg: null, bodyFatPct: null, leanMassKg: null })];
+      const series = computeBodyCompositionSeries(snaps);
+      expect(series.length).toBe(0);
     });
   });
 });

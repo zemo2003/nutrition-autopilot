@@ -230,6 +230,47 @@ export function classifyBMI(bmi: number): string {
   return "obese";
 }
 
+/**
+ * Classify BMI with body-fat-aware context.
+ * For muscular individuals (e.g., athletes), standard BMI
+ * categories are misleading. This function returns context
+ * when DEXA body fat % data is available.
+ */
+export function classifyBMIWithContext(
+  bmi: number,
+  bodyFatPct?: number | null,
+): { category: string; context?: string } {
+  const category = classifyBMI(bmi);
+
+  if (bodyFatPct == null) {
+    return { category };
+  }
+
+  // Muscular athletes: BMI says overweight/obese but body fat is lean
+  if (bmi >= 25 && bmi < 30 && bodyFatPct < 20) {
+    return {
+      category,
+      context: `BMI ${bmi} (overweight range) but body fat is ${bodyFatPct}% (lean) — likely muscle mass`,
+    };
+  }
+  if (bmi >= 30 && bodyFatPct < 15) {
+    return {
+      category,
+      context: `BMI ${bmi} (obese range) but body fat is only ${bodyFatPct}% — athletic build`,
+    };
+  }
+
+  // High body fat confirmation
+  if (bmi >= 30 && bodyFatPct > 30) {
+    return {
+      category,
+      context: `BMI ${bmi} with body fat ${bodyFatPct}% — both indicate excess adiposity`,
+    };
+  }
+
+  return { category };
+}
+
 export interface BodyCompositionPoint {
   date: Date;
   weightKg: number | null;
