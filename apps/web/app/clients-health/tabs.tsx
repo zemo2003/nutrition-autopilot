@@ -6,13 +6,13 @@ import BiometricsBoard from "../../components/biometrics-board";
 import DocumentsBoard from "../../components/documents-board";
 import MetricsBoard from "../../components/metrics-board";
 
-type Tab = "profile" | "biometrics" | "documents" | "metrics";
+type Tab = "health" | "documents";
 
 type Client = { id: string; name: string; externalRef?: string };
 
 export function ClientHealthTabs({ clients }: { clients: Client[] }) {
   const [selectedClient, setSelectedClient] = useState<string>(clients[0]?.id ?? "");
-  const [tab, setTab] = useState<Tab>("biometrics");
+  const [tab, setTab] = useState<Tab>("health");
 
   if (clients.length === 0) {
     return (
@@ -42,27 +42,29 @@ export function ClientHealthTabs({ clients }: { clients: Client[] }) {
         ))}
       </div>
 
+      {/* Profile always visible */}
+      <div className="mt-4" key={`profile-${selectedClient}`}>
+        <ClientProfileView clientId={selectedClient} />
+      </div>
+
       {/* Sub-tabs */}
       <div className="pill-bar mt-4">
-        <button className={`pill ${tab === "biometrics" ? "active" : ""}`} onClick={() => setTab("biometrics")}>
-          Biometrics
+        <button className={`pill ${tab === "health" ? "active" : ""}`} onClick={() => setTab("health")}>
+          Health Data
         </button>
         <button className={`pill ${tab === "documents" ? "active" : ""}`} onClick={() => setTab("documents")}>
           Documents
         </button>
-        <button className={`pill ${tab === "metrics" ? "active" : ""}`} onClick={() => setTab("metrics")}>
-          Metrics
-        </button>
-        <button className={`pill ${tab === "profile" ? "active" : ""}`} onClick={() => setTab("profile")}>
-          Profile
-        </button>
       </div>
 
-      <div className="mt-6" key={selectedClient}>
-        {tab === "biometrics" && <BiometricsBoard clientId={selectedClient} />}
+      <div className="mt-6" key={`tab-${selectedClient}`}>
+        {tab === "health" && (
+          <div className="stack" style={{ gap: "var(--sp-6)" }}>
+            <BiometricsBoard clientId={selectedClient} />
+            <MetricsBoard clientId={selectedClient} />
+          </div>
+        )}
         {tab === "documents" && <DocumentsBoard clientId={selectedClient} />}
-        {tab === "metrics" && <MetricsBoard clientId={selectedClient} />}
-        {tab === "profile" && <ClientProfileView clientId={selectedClient} />}
       </div>
     </>
   );
