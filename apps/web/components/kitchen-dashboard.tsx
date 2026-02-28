@@ -125,7 +125,7 @@ export function KitchenDashboard({ counts, clients, sauceCount }: Props) {
     const base = resolveApiBase();
     try {
       const [batchRes, projRes, verifyRes] = await Promise.all([
-        fetch(`${base}/v1/batches?status=IN_PREP,COOKING,COOLING,PORTIONING`, { cache: "no-store" }),
+        fetch(`${base}/v1/batches?status=IN_PREP,COOKING,CHILLING,PORTIONED`, { cache: "no-store" }),
         fetch(`${base}/v1/inventory/projections`, { cache: "no-store" }),
         fetch(`${base}/v1/verification/tasks?status=OPEN`, { cache: "no-store" }),
       ]);

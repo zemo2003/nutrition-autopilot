@@ -120,7 +120,7 @@ export const createBatchBodySchema = z.object({
 });
 
 export const updateBatchStatusBodySchema = z.object({
-  status: z.enum(["PLANNED", "IN_PREP", "COOKING", "COOLING", "PORTIONING", "READY", "SERVED", "CANCELLED"]),
+  status: z.enum(["PLANNED", "IN_PREP", "COOKING", "CHILLING", "PORTIONED", "READY", "CANCELLED"]),
   actualYieldG: z.number().nonnegative().finite().optional(),
   lotOverrides: z.array(z.object({
     ingredientId: z.string().min(1),
@@ -190,14 +190,14 @@ export const createBodyCompositionBodySchema = z.object({
 });
 
 export const createCheckpointBodySchema = z.object({
-  checkpointType: z.enum(["TEMP_CHECK", "WEIGHT_CHECK", "TIMER", "QUALITY_CHECK", "PHOTO", "NOTE"]),
+  checkpointType: z.enum(["PREP_START", "COOK_START", "TEMP_CHECK", "COOK_END", "CHILL_START", "CHILL_TEMP_CHECK", "CHILL_END", "PORTION_START", "PORTION_END", "READY_CHECK"]),
   tempC: z.number().finite().optional(),
   notes: z.string().optional(),
   timerDurationM: z.number().positive().finite().optional(),
 });
 
 export const createSauceVariantBodySchema = z.object({
-  variantType: z.enum(["BASE", "SPICY", "MILD", "SWEET", "TANGY", "SAVORY"]),
+  variantType: z.enum(["STANDARD", "LOW_FAT", "HIGH_FAT"]),
   kcalPer100g: z.number().nonnegative().finite().optional(),
   proteinPer100g: z.number().nonnegative().finite().optional(),
   carbPer100g: z.number().nonnegative().finite().optional(),
@@ -207,7 +207,7 @@ export const createSauceVariantBodySchema = z.object({
 });
 
 export const createSaucePairingBodySchema = z.object({
-  pairedComponentType: z.enum(["PROTEIN", "VEGETABLE", "CARB_BASE", "SAUCE", "CONDIMENT", "SNACK", "BEVERAGE"]),
+  pairedComponentType: z.enum(["PROTEIN", "CARB_BASE", "VEGETABLE", "SAUCE", "CONDIMENT", "OTHER"]),
   recommended: z.boolean().default(false),
   defaultPortionG: z.number().positive().finite().optional(),
   notes: z.string().optional(),

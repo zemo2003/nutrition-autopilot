@@ -5,6 +5,16 @@ import { useEffect, useState, useCallback } from "react";
 import { Sparkline } from "./sparkline";
 import { DualLineChart } from "./dual-line-chart";
 import { AdaptationTimeline } from "./adaptation-timeline";
+import {
+  computeAge,
+  computeTDEE,
+  computeCaloricBalance,
+  recommendMacroTargets,
+  ACTIVITY_MULTIPLIERS,
+  type ActivityLevel,
+  type GoalType,
+  ACTIVITY_LABELS,
+} from "@nutrition/nutrition-engine";
 
 function resolveApiBase() {
   if (process.env.NEXT_PUBLIC_API_BASE) return process.env.NEXT_PUBLIC_API_BASE;
@@ -869,39 +879,18 @@ export function ScienceDashboard({ counts, quality, clients }: Props) {
             const h = clientProfile.heightCm ?? 0;
             const dobStr = clientProfile.dateOfBirth;
             const sex = (clientProfile.sex as "male" | "female") ?? "male";
-            let ageYears = 30; // default fallback
-            if (dobStr) {
-              const dob = new Date(dobStr);
-              const now = new Date();
-              ageYears = now.getFullYear() - dob.getFullYear();
-              if (now.getMonth() < dob.getMonth() || (now.getMonth() === dob.getMonth() && now.getDate() < dob.getDate())) ageYears--;
-            }
+            const ageYears = dobStr ? computeAge(new Date(dobStr)) : 30;
 
             if (w <= 0 || h <= 0) {
               return <div style={{ color: "var(--c-ink-muted)", fontSize: "var(--text-sm)" }}>Enter weight and height to estimate TDEE.</div>;
             }
 
-            // Mifflin-St Jeor
-            const bmr = Math.round(sex === "male"
-              ? 10 * w + 6.25 * h - 5 * ageYears + 5
-              : 10 * w + 6.25 * h - 5 * ageYears - 161);
-            const multipliers: Record<string, number> = { sedentary: 1.2, light: 1.375, moderate: 1.55, active: 1.725, very_active: 1.9 };
-            const tdee = Math.round(bmr * (multipliers[tdeeActivityLevel] ?? 1.55));
+            const activityLevel = (tdeeActivityLevel as ActivityLevel) ?? "moderate";
+            const { bmr, tdee } = computeTDEE({ weightKg: w, heightCm: h, ageYears, sex }, activityLevel);
             const avgKcal = weekly?.summary.avgKcal ?? nutritionHistory?.summary.avgKcal ?? 0;
-            const balance = avgKcal - tdee;
-            const balanceStatus = balance > 100 ? "surplus" : balance < -100 ? "deficit" : "maintenance";
-
-            // Macro recommendations
-            const goalMultipliers: Record<string, { kcalAdj: number; protPerKg: number; fatPct: number }> = {
-              cut: { kcalAdj: -500, protPerKg: 2.2, fatPct: 0.25 },
-              maintain: { kcalAdj: 0, protPerKg: 1.8, fatPct: 0.30 },
-              bulk: { kcalAdj: 300, protPerKg: 2.0, fatPct: 0.25 },
-            };
-            const gm = goalMultipliers[tdeeGoal] ?? goalMultipliers.maintain!;
-            const recKcal = Math.max(tdee + gm.kcalAdj, 1200);
-            const recProtein = Math.round(w * gm.protPerKg);
-            const recFat = Math.round((recKcal * gm.fatPct) / 9);
-            const recCarb = Math.max(0, Math.round((recKcal - recProtein * 4 - recFat * 9) / 4));
+            const { balance, status: balanceStatus } = computeCaloricBalance(tdee, avgKcal);
+            const goal = (tdeeGoal as GoalType) ?? "maintain";
+            const { kcal: recKcal, proteinG: recProtein, carbG: recCarb, fatG: recFat } = recommendMacroTargets({ tdee, goal, weightKg: w });
 
             return (
               <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
@@ -922,7 +911,7 @@ export function ScienceDashboard({ counts, quality, clients }: Props) {
                 <div style={{ display: "flex", gap: "var(--sp-2)", alignItems: "center", flexWrap: "wrap" }}>
                   <label style={{ fontSize: "var(--text-xs)", fontWeight: 600 }}>Activity:</label>
                   <select className="input" value={tdeeActivityLevel} onChange={(e) => setTdeeActivityLevel(e.target.value)} style={{ fontSize: "var(--text-xs)", width: "auto" }}>
-                    {Object.entries(multipliers).map(([k, v]) => (
+                    {Object.entries(ACTIVITY_MULTIPLIERS).map(([k, v]) => (
                       <option key={k} value={k}>{k.replace(/_/g, " ")} (×{v})</option>
                     ))}
                   </select>

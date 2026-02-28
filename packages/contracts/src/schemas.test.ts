@@ -290,13 +290,19 @@ describe("createBatchBodySchema", () => {
 
 describe("updateBatchStatusBodySchema", () => {
   it("accepts valid statuses", () => {
-    for (const status of ["PLANNED", "IN_PREP", "COOKING", "COOLING", "PORTIONING", "READY", "SERVED", "CANCELLED"]) {
+    for (const status of ["PLANNED", "IN_PREP", "COOKING", "CHILLING", "PORTIONED", "READY", "CANCELLED"]) {
       expect(() => updateBatchStatusBodySchema.parse({ status })).not.toThrow();
     }
   });
 
   it("rejects unknown status", () => {
     expect(() => updateBatchStatusBodySchema.parse({ status: "DELETED" })).toThrow();
+  });
+
+  it("rejects old Zod-only statuses that do not exist in DB", () => {
+    for (const invalid of ["COOLING", "PORTIONING", "SERVED"]) {
+      expect(() => updateBatchStatusBodySchema.parse({ status: invalid })).toThrow();
+    }
   });
 });
 
@@ -480,12 +486,12 @@ describe("updateClientBodySchema", () => {
 
 describe("createSauceVariantBodySchema", () => {
   it("accepts valid variant", () => {
-    createSauceVariantBodySchema.parse({ variantType: "SPICY" });
+    createSauceVariantBodySchema.parse({ variantType: "STANDARD" });
   });
 
   it("accepts with nutrient overrides", () => {
     createSauceVariantBodySchema.parse({
-      variantType: "BASE",
+      variantType: "LOW_FAT",
       kcalPer100g: 45,
       proteinPer100g: 1,
       carbPer100g: 8,
@@ -499,7 +505,7 @@ describe("createSauceVariantBodySchema", () => {
 
   it("rejects negative nutrient values", () => {
     expect(() =>
-      createSauceVariantBodySchema.parse({ variantType: "BASE", kcalPer100g: -10 })
+      createSauceVariantBodySchema.parse({ variantType: "STANDARD", kcalPer100g: -10 })
     ).toThrow();
   });
 });
@@ -516,6 +522,38 @@ describe("createSaucePairingBodySchema", () => {
     expect(() =>
       createSaucePairingBodySchema.parse({ pairedComponentType: "DESSERT" })
     ).toThrow();
+  });
+});
+
+describe("createCheckpointBodySchema", () => {
+  it("accepts valid checkpoint types matching DB enum", () => {
+    for (const checkpointType of [
+      "PREP_START", "COOK_START", "TEMP_CHECK", "COOK_END",
+      "CHILL_START", "CHILL_TEMP_CHECK", "CHILL_END",
+      "PORTION_START", "PORTION_END", "READY_CHECK",
+    ]) {
+      expect(() => createCheckpointBodySchema.parse({ checkpointType })).not.toThrow();
+    }
+  });
+
+  it("accepts checkpoint with optional fields", () => {
+    const result = createCheckpointBodySchema.parse({
+      checkpointType: "TEMP_CHECK",
+      tempC: 74.5,
+      notes: "Internal temp reached target",
+    });
+    expect(result.checkpointType).toBe("TEMP_CHECK");
+    expect(result.tempC).toBe(74.5);
+  });
+
+  it("rejects old Zod-only checkpoint types that do not exist in DB", () => {
+    for (const invalid of ["WEIGHT_CHECK", "TIMER", "QUALITY_CHECK", "PHOTO", "NOTE"]) {
+      expect(() => createCheckpointBodySchema.parse({ checkpointType: invalid })).toThrow();
+    }
+  });
+
+  it("rejects unknown checkpoint type", () => {
+    expect(() => createCheckpointBodySchema.parse({ checkpointType: "RANDOM" })).toThrow();
   });
 });
 

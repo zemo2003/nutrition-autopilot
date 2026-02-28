@@ -4096,7 +4096,7 @@ v1Router.get("/yield-calibrations/proposals", async (req, res) => {
   const batches = await prisma.batchProduction.findMany({
     where: {
       organizationId: org.id,
-      status: "DONE" as BatchStatus,
+      status: BatchStatus.READY,
       actualYieldG: { not: null },
       ...(componentId ? { componentId } : {}),
     },
