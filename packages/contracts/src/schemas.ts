@@ -311,6 +311,27 @@ export const reorderRouteStopsBodySchema = z.object({
 });
 
 // ============================================================================
+// SCHEDULE-AWARE BATCH PREP
+// ============================================================================
+
+export const scheduleAwarePrepDraftBodySchema = z.object({
+  weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  weekEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  scheduleAware: z.boolean().optional(),
+});
+
+export const createBatchFromScheduleBodySchema = z.object({
+  componentId: z.string().min(1),
+  weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  weekEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  portionSizeG: z.number().positive().optional(),
+});
+
+export const updateBatchPortionBodySchema = z.object({
+  sealed: z.boolean(),
+});
+
+// ============================================================================
 // DTO TYPES
 // ============================================================================
 

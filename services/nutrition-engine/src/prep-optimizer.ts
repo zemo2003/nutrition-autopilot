@@ -12,6 +12,10 @@ export interface MealDemand {
   componentName: string;
   componentType: string;
   cookedG: number;
+  // Optional fields for schedule-aware mode
+  clientId?: string;
+  clientName?: string;
+  mealSlot?: string;
 }
 
 export interface YieldInfo {
@@ -61,6 +65,49 @@ export interface PrepDraftResult {
   shortages: ComponentDemandRollup[];
   totalMeals: number;
   totalComponents: number;
+  // Schedule-aware enrichments
+  perDayBreakdown?: DayComponentDemand[];
+  portionPlans?: BatchPortionPlan[];
+}
+
+// --- Schedule-aware types ---
+
+export interface PortionDemand {
+  clientId: string;
+  clientName: string;
+  mealSlot: string;
+  cookedG: number;
+  mealScheduleId: string;
+}
+
+export interface DayComponentDemand {
+  serviceDate: string;
+  componentId: string;
+  componentName: string;
+  componentType: string;
+  totalCookedG: number;
+  rawG: number;
+  yieldFactor: number;
+  portions: PortionDemand[];
+}
+
+export interface PortionPlanEntry {
+  label: string;
+  clientId: string;
+  clientName: string;
+  serviceDate: string;
+  mealSlot: string;
+  cookedG: number;
+  mealScheduleId: string;
+}
+
+export interface BatchPortionPlan {
+  componentId: string;
+  componentName: string;
+  totalCookedG: number;
+  totalRawG: number;
+  portionCount: number;
+  portions: PortionPlanEntry[];
 }
 
 /**
@@ -174,6 +221,142 @@ export function generatePrepDraft(
     shortages,
     totalMeals: meals.length,
     totalComponents: demand.length,
+  };
+}
+
+// --- Schedule-aware functions ---
+
+/**
+ * Compute per-day, per-component breakdown with individual client portions.
+ */
+export function computePerDayBreakdown(
+  meals: MealDemand[],
+  yields: YieldInfo[]
+): DayComponentDemand[] {
+  const yieldMap = new Map(yields.map((y) => [y.componentId, y]));
+
+  // Group by (componentId, serviceDate)
+  const groups = new Map<string, MealDemand[]>();
+  for (const meal of meals) {
+    const key = `${meal.componentId}::${meal.serviceDate}`;
+    const existing = groups.get(key) ?? [];
+    existing.push(meal);
+    groups.set(key, existing);
+  }
+
+  const result: DayComponentDemand[] = [];
+
+  for (const [, groupMeals] of groups.entries()) {
+    const first = groupMeals[0]!;
+    const totalCookedG = round2(groupMeals.reduce((sum, m) => sum + m.cookedG, 0));
+
+    const yieldInfo = yieldMap.get(first.componentId);
+    const yieldFactor = yieldInfo?.yieldFactor ?? 1.0;
+    const rawG = yieldFactor > 0 ? round2(totalCookedG / yieldFactor) : totalCookedG;
+
+    const portions: PortionDemand[] = groupMeals
+      .filter((m) => m.clientId && m.clientName && m.mealSlot)
+      .map((m) => ({
+        clientId: m.clientId!,
+        clientName: m.clientName!,
+        mealSlot: m.mealSlot!,
+        cookedG: m.cookedG,
+        mealScheduleId: m.mealId,
+      }));
+
+    result.push({
+      serviceDate: first.serviceDate,
+      componentId: first.componentId,
+      componentName: first.componentName,
+      componentType: first.componentType,
+      totalCookedG,
+      rawG,
+      yieldFactor,
+      portions,
+    });
+  }
+
+  // Sort by date, then component name
+  result.sort((a, b) => {
+    const dateCmp = a.serviceDate.localeCompare(b.serviceDate);
+    if (dateCmp !== 0) return dateCmp;
+    return a.componentName.localeCompare(b.componentName);
+  });
+
+  return result;
+}
+
+/**
+ * Generate a portion plan for a single component — labeled portions for
+ * individual client/day/slot combinations (e.g., sous vide bags).
+ */
+export function computePortionPlan(
+  rollup: ComponentDemandRollup,
+  meals: MealDemand[]
+): BatchPortionPlan {
+  const componentMeals = meals.filter((m) => m.componentId === rollup.componentId);
+
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  const portions: PortionPlanEntry[] = componentMeals
+    .filter((m) => m.clientId && m.clientName && m.mealSlot)
+    .map((m) => {
+      const d = new Date(m.serviceDate);
+      const dayName = dayNames[d.getUTCDay()] ?? m.serviceDate;
+      const slotLabel = m.mealSlot!.charAt(0) + m.mealSlot!.slice(1).toLowerCase();
+      const label = `${m.clientName} / ${dayName} ${slotLabel} / ${Math.round(m.cookedG)}g`;
+
+      return {
+        label,
+        clientId: m.clientId!,
+        clientName: m.clientName!,
+        serviceDate: m.serviceDate,
+        mealSlot: m.mealSlot!,
+        cookedG: m.cookedG,
+        mealScheduleId: m.mealId,
+      };
+    });
+
+  // Sort by date, then client name
+  portions.sort((a, b) => {
+    const dateCmp = a.serviceDate.localeCompare(b.serviceDate);
+    if (dateCmp !== 0) return dateCmp;
+    return a.clientName.localeCompare(b.clientName);
+  });
+
+  return {
+    componentId: rollup.componentId,
+    componentName: rollup.componentName,
+    totalCookedG: rollup.totalCookedG,
+    totalRawG: rollup.rawG,
+    portionCount: portions.length,
+    portions,
+  };
+}
+
+/**
+ * Generate an enriched prep draft with per-day breakdowns and portion plans.
+ * Falls back to regular generatePrepDraft for the base data.
+ */
+export function generateScheduleAwarePrepDraft(
+  weekStart: string,
+  weekEnd: string,
+  meals: MealDemand[],
+  yields: YieldInfo[],
+  inventory: InventoryOnHand[]
+): PrepDraftResult {
+  const base = generatePrepDraft(weekStart, weekEnd, meals, yields, inventory);
+
+  const perDayBreakdown = computePerDayBreakdown(meals, yields);
+
+  const portionPlans = base.demand.map((rollup) =>
+    computePortionPlan(rollup, meals)
+  );
+
+  return {
+    ...base,
+    perDayBreakdown,
+    portionPlans,
   };
 }
 

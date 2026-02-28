@@ -216,7 +216,13 @@ v1Router.get("/clients", async (_req, res) => {
     clients: clients.map((c) => ({
       id: c.id,
       fullName: c.fullName,
-      timezone: c.timezone
+      timezone: c.timezone,
+      email: c.email ?? null,
+      phone: c.phone ?? null,
+      externalRef: c.externalRef ?? null,
+      deliveryAddress: c.deliveryAddress ?? null,
+      deliveryNotes: c.deliveryNotes ?? null,
+      deliveryZone: c.deliveryZone ?? null,
     }))
   });
 });
@@ -3262,6 +3268,225 @@ v1Router.get("/batches/:batchId/available-lots", async (req, res) => {
   return res.json({ ingredients: result });
 });
 
+// ── Schedule-Aware Batch Prep ──────────────────────────────────
+
+/** POST /v1/batches/from-schedule — create a batch with auto-generated portions */
+v1Router.post("/batches/from-schedule", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { componentId, weekStart, weekEnd, portionSizeG } = req.body as {
+    componentId: string;
+    weekStart: string;
+    weekEnd: string;
+    portionSizeG?: number;
+  };
+
+  if (!componentId || !weekStart || !weekEnd) {
+    return res.status(400).json({ error: "componentId, weekStart, weekEnd required" });
+  }
+
+  const start = new Date(weekStart);
+  const end = new Date(weekEnd);
+
+  // Verify component exists
+  const component = await prisma.component.findFirst({
+    where: { id: componentId, organizationId: org.id },
+  });
+  if (!component) {
+    return res.status(404).json({ error: "Component not found" });
+  }
+
+  // Find MealSchedules that use this component via Sku → Recipe → RecipeLine
+  const schedules = await prisma.mealSchedule.findMany({
+    where: {
+      organizationId: org.id,
+      status: "PLANNED" as ScheduleStatus,
+      serviceDate: { gte: start, lte: end },
+      skuId: { not: null },
+    },
+    include: {
+      client: { select: { id: true, fullName: true } },
+      sku: {
+        include: {
+          recipes: {
+            where: { active: true },
+            include: {
+              lines: {
+                where: { ingredientId: componentId },
+                include: { ingredient: { select: { id: true, name: true } } },
+              },
+            },
+            take: 1,
+          },
+        },
+      },
+    },
+  });
+
+  // Build portion entries
+  type PortionEntry = {
+    mealScheduleId: string;
+    clientId: string;
+    clientName: string;
+    serviceDate: Date;
+    mealSlot: string;
+    cookedG: number;
+  };
+  const portions: PortionEntry[] = [];
+
+  for (const s of schedules) {
+    const recipe = s.sku?.recipes?.[0];
+    if (!recipe?.lines?.length) continue;
+    for (const line of recipe.lines) {
+      portions.push({
+        mealScheduleId: s.id,
+        clientId: s.clientId,
+        clientName: s.client.fullName,
+        serviceDate: s.serviceDate,
+        mealSlot: s.mealSlot,
+        cookedG: line.targetGPerServing * (recipe.servings ?? 1),
+      });
+    }
+  }
+
+  if (portions.length === 0) {
+    return res.status(400).json({ error: "No scheduled meals found for this component in the date range" });
+  }
+
+  // Compute totals
+  const totalCookedG = portions.reduce((sum, p) => sum + p.cookedG, 0);
+
+  // Get yield factor
+  const calibration = await prisma.yieldCalibration.findFirst({
+    where: {
+      organizationId: org.id,
+      componentId,
+      status: "ACCEPTED" as CalibrationStatus,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  const yieldFactor = calibration?.proposedYieldPct ? calibration.proposedYieldPct / 100 : component.defaultYieldFactor;
+  const rawInputG = yieldFactor > 0 ? Math.round((totalCookedG / yieldFactor) * 100) / 100 : totalCookedG;
+  const expectedYieldG = Math.round(rawInputG * yieldFactor * 100) / 100;
+
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  // Create batch + portions in a transaction
+  const batch = await prisma.$transaction(async (tx) => {
+    const b = await tx.batchProduction.create({
+      data: {
+        organizationId: org.id,
+        componentId,
+        status: "PLANNED" as BatchStatus,
+        plannedDate: start,
+        rawInputG,
+        expectedYieldG,
+        portionCount: portions.length,
+        portionSizeG: portionSizeG ?? null,
+        notes: `Schedule-aware batch for ${weekStart} to ${weekEnd}`,
+      },
+    });
+
+    for (const p of portions) {
+      const d = p.serviceDate;
+      const dayName = dayNames[d.getUTCDay()] ?? d.toISOString().slice(0, 10);
+      const slotLabel = p.mealSlot.charAt(0) + p.mealSlot.slice(1).toLowerCase();
+      const label = `${p.clientName} / ${dayName} ${slotLabel} / ${Math.round(p.cookedG)}g`;
+
+      await tx.batchPortion.create({
+        data: {
+          batchProductionId: b.id,
+          mealScheduleId: p.mealScheduleId,
+          clientId: p.clientId,
+          serviceDate: p.serviceDate,
+          mealSlot: p.mealSlot,
+          portionG: p.cookedG,
+          label,
+        },
+      });
+    }
+
+    return b;
+  });
+
+  // Fetch back with portions
+  const result = await prisma.batchProduction.findUnique({
+    where: { id: batch.id },
+    include: {
+      component: { select: { id: true, name: true, componentType: true } },
+      portions: { orderBy: { serviceDate: "asc" } },
+    },
+  });
+
+  return res.json(result);
+});
+
+/** GET /v1/batches/:batchId/portions — list portions for a batch */
+v1Router.get("/batches/:batchId/portions", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { batchId } = req.params;
+
+  const batch = await prisma.batchProduction.findFirst({
+    where: { id: batchId, organizationId: org.id },
+  });
+  if (!batch) {
+    return res.status(404).json({ error: "Batch not found" });
+  }
+
+  const portions = await prisma.batchPortion.findMany({
+    where: { batchProductionId: batchId },
+    include: {
+      client: { select: { id: true, fullName: true } },
+    },
+    orderBy: [{ serviceDate: "asc" }, { label: "asc" }],
+  });
+
+  return res.json({
+    portions: portions.map((p) => ({
+      id: p.id,
+      label: p.label,
+      portionG: p.portionG,
+      serviceDate: p.serviceDate?.toISOString().slice(0, 10) ?? null,
+      mealSlot: p.mealSlot,
+      clientId: p.clientId,
+      clientName: p.client?.fullName ?? null,
+      sealed: p.sealed,
+      mealScheduleId: p.mealScheduleId,
+    })),
+  });
+});
+
+/** PATCH /v1/batches/:batchId/portions/:portionId — update portion (toggle sealed) */
+v1Router.patch("/batches/:batchId/portions/:portionId", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { batchId, portionId } = req.params;
+  const { sealed } = req.body as { sealed: boolean };
+
+  if (typeof sealed !== "boolean") {
+    return res.status(400).json({ error: "sealed (boolean) required" });
+  }
+
+  const batch = await prisma.batchProduction.findFirst({
+    where: { id: batchId, organizationId: org.id },
+  });
+  if (!batch) {
+    return res.status(404).json({ error: "Batch not found" });
+  }
+
+  const portion = await prisma.batchPortion.findFirst({
+    where: { id: portionId, batchProductionId: batchId },
+  });
+  if (!portion) {
+    return res.status(404).json({ error: "Portion not found" });
+  }
+
+  const updated = await prisma.batchPortion.update({
+    where: { id: portionId },
+    data: { sealed },
+  });
+
+  return res.json(updated);
+});
+
 // ── Kitchen Ops: Print Data ────────────────────────────────────
 
 v1Router.get("/print/batch-sheet/:batchId", async (req, res) => {
@@ -4551,10 +4776,14 @@ v1Router.delete("/compositions/:id", async (req, res) => {
   return res.json({ deleted: true });
 });
 
-/** POST /v1/prep-drafts — generate a weekly prep draft */
+/** POST /v1/prep-drafts — generate a weekly prep draft (optionally schedule-aware) */
 v1Router.post("/prep-drafts", async (req, res) => {
   const org = await getPrimaryOrganization();
-  const { weekStart, weekEnd } = req.body as { weekStart: string; weekEnd: string };
+  const { weekStart, weekEnd, scheduleAware } = req.body as {
+    weekStart: string;
+    weekEnd: string;
+    scheduleAware?: boolean;
+  };
 
   if (!weekStart || !weekEnd) {
     return res.status(400).json({ error: "weekStart and weekEnd required" });
@@ -4585,24 +4814,43 @@ v1Router.post("/prep-drafts", async (req, res) => {
           },
         },
       },
+      client: scheduleAware ? { select: { id: true, fullName: true } } : false,
     },
   });
 
   // Build meal demands from schedule → sku → recipe → lines
-  const meals: { mealId: string; serviceDate: string; componentId: string; componentName: string; componentType: string; cookedG: number }[] = [];
+  type MealEntry = {
+    mealId: string;
+    serviceDate: string;
+    componentId: string;
+    componentName: string;
+    componentType: string;
+    cookedG: number;
+    clientId?: string;
+    clientName?: string;
+    mealSlot?: string;
+  };
+  const meals: MealEntry[] = [];
 
   for (const s of schedules) {
     const recipe = s.sku?.recipes?.[0];
     if (!recipe?.lines) continue;
     for (const line of recipe.lines) {
-      meals.push({
+      const entry: MealEntry = {
         mealId: s.id,
         serviceDate: s.serviceDate.toISOString().slice(0, 10),
         componentId: line.ingredientId,
         componentName: line.ingredient.name,
         componentType: line.ingredient.category,
         cookedG: line.targetGPerServing * (recipe.servings ?? 1),
-      });
+      };
+      // Enrich with client info for schedule-aware mode
+      if (scheduleAware && (s as any).client) {
+        entry.clientId = s.clientId;
+        entry.clientName = (s as any).client.fullName;
+        entry.mealSlot = s.mealSlot;
+      }
+      meals.push(entry);
     }
   }
 
@@ -4652,8 +4900,14 @@ v1Router.post("/prep-drafts", async (req, res) => {
     availableG: g,
   }));
 
-  const { generatePrepDraft } = await import("@nutrition/nutrition-engine/prep-optimizer");
-  const draft = generatePrepDraft(weekStart, weekEnd, meals, yields, inventory);
+  let draft;
+  if (scheduleAware) {
+    const { generateScheduleAwarePrepDraft } = await import("@nutrition/nutrition-engine/prep-optimizer");
+    draft = generateScheduleAwarePrepDraft(weekStart, weekEnd, meals, yields, inventory);
+  } else {
+    const { generatePrepDraft } = await import("@nutrition/nutrition-engine/prep-optimizer");
+    draft = generatePrepDraft(weekStart, weekEnd, meals, yields, inventory);
+  }
 
   // Save to DB
   const record = await prisma.prepDraft.create({

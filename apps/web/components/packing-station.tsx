@@ -53,7 +53,7 @@ export function PackingStation() {
       );
       if (res.ok) {
         const data = await res.json();
-        setOrders(data);
+        setOrders(Array.isArray(data) ? data : data.orders ?? []);
       }
     } catch {
       // silently fail

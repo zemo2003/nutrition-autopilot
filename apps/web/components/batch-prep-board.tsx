@@ -112,6 +112,20 @@ export function BatchPrepBoard() {
   const [advancingId, setAdvancingId] = useState<string | null>(null);
   const [actualYield, setActualYield] = useState("");
 
+  // Portions state
+  type BatchPortion = {
+    id: string;
+    label: string;
+    portionG: number;
+    serviceDate: string | null;
+    mealSlot: string | null;
+    clientName: string | null;
+    sealed: boolean;
+  };
+  const [expandedPortions, setExpandedPortions] = useState<Set<string>>(new Set());
+  const [portionsCache, setPortionsCache] = useState<Record<string, BatchPortion[]>>({});
+  const [portionsLoading, setPortionsLoading] = useState<Set<string>>(new Set());
+
   // Lot selection modal state
   type LotOption = { id: string; lotCode: string | null; productName: string; availableG: number; receivedAt: string; expiresAt: string | null; isDefault: boolean };
   type IngredientLots = { ingredientId: string; ingredientName: string; neededG: number; lots: LotOption[] };
@@ -236,6 +250,59 @@ export function BatchPrepBoard() {
     }
     // No lot selection needed — proceed directly
     await executeAdvance(batchId, newStatus);
+  };
+
+  const togglePortions = async (batchId: string) => {
+    const next = new Set(expandedPortions);
+    if (next.has(batchId)) {
+      next.delete(batchId);
+      setExpandedPortions(next);
+      return;
+    }
+    next.add(batchId);
+    setExpandedPortions(next);
+
+    // Load portions if not cached
+    if (!portionsCache[batchId]) {
+      setPortionsLoading((prev) => new Set(prev).add(batchId));
+      try {
+        const res = await fetch(`${apiBase}/v1/batches/${batchId}/portions`);
+        if (res.ok) {
+          const data = await res.json();
+          setPortionsCache((prev) => ({ ...prev, [batchId]: data.portions ?? [] }));
+        }
+      } catch {
+        // Silently fail — portions panel will show empty
+      } finally {
+        setPortionsLoading((prev) => {
+          const next = new Set(prev);
+          next.delete(batchId);
+          return next;
+        });
+      }
+    }
+  };
+
+  const handleToggleSeal = async (batchId: string, portionId: string, sealed: boolean) => {
+    try {
+      const res = await fetch(`${apiBase}/v1/batches/${batchId}/portions/${portionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sealed }),
+      });
+      if (res.ok) {
+        // Update cache
+        setPortionsCache((prev) => {
+          const portions = prev[batchId] ?? [];
+          return {
+            ...prev,
+            [batchId]: portions.map((p) => (p.id === portionId ? { ...p, sealed } : p)),
+          };
+        });
+      }
+    } catch {
+      // Silently fail
+    }
   };
 
   if (loading) {
@@ -391,6 +458,35 @@ export function BatchPrepBoard() {
                             {batch.notes}
                           </div>
                         )}
+                        {/* Portions toggle */}
+                        {batch.portionCount && batch.portionCount > 0 && (
+                          <button
+                            onClick={() => togglePortions(batch.id)}
+                            style={{
+                              marginTop: 6,
+                              background: "none",
+                              border: "none",
+                              cursor: "pointer",
+                              fontSize: "var(--text-xs)",
+                              color: "var(--c-primary)",
+                              padding: 0,
+                              fontWeight: 500,
+                            }}
+                          >
+                            {expandedPortions.has(batch.id) ? "\u25B2 Hide" : "\u25BC Show"} portions ({batch.portionCount})
+                            {(() => {
+                              const cached = portionsCache[batch.id];
+                              if (!cached) return null;
+                              const sealedCount = cached.filter((p) => p.sealed).length;
+                              if (sealedCount === 0) return null;
+                              return (
+                                <span style={{ marginLeft: 6, color: "var(--c-success)" }}>
+                                  {sealedCount}/{cached.length} sealed
+                                </span>
+                              );
+                            })()}
+                          </button>
+                        )}
                       </div>
 
                       {/* Actions */}
@@ -432,6 +528,70 @@ export function BatchPrepBoard() {
                         )}
                       </div>
                     </div>
+
+                    {/* Expanded portions panel */}
+                    {expandedPortions.has(batch.id) && (
+                      <div style={{
+                        borderTop: "1px solid var(--c-border)",
+                        marginTop: "var(--sp-3)",
+                        paddingTop: "var(--sp-3)",
+                      }}>
+                        {portionsLoading.has(batch.id) ? (
+                          <div style={{ fontSize: "var(--text-sm)", color: "var(--c-ink-muted)" }}>Loading portions...</div>
+                        ) : (
+                          (() => {
+                            const portions = portionsCache[batch.id] ?? [];
+                            if (portions.length === 0) {
+                              return <div style={{ fontSize: "var(--text-sm)", color: "var(--c-ink-muted)" }}>No individual portions.</div>;
+                            }
+                            const sealedCount = portions.filter((p) => p.sealed).length;
+                            return (
+                              <>
+                                <div style={{ fontSize: "var(--text-xs)", color: "var(--c-ink-muted)", marginBottom: "var(--sp-2)" }}>
+                                  <strong>{sealedCount}/{portions.length}</strong> portions sealed
+                                </div>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                  {portions.map((p) => (
+                                    <label
+                                      key={p.id}
+                                      style={{
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: "var(--sp-2)",
+                                        padding: "4px 8px",
+                                        borderRadius: "var(--r-sm, 4px)",
+                                        background: p.sealed ? "var(--c-success-soft, rgba(34,197,94,0.08))" : "transparent",
+                                        cursor: "pointer",
+                                        fontSize: "var(--text-sm)",
+                                      }}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={p.sealed}
+                                        onChange={(e) => handleToggleSeal(batch.id, p.id, e.target.checked)}
+                                        style={{ flexShrink: 0 }}
+                                      />
+                                      <span style={{
+                                        flex: 1,
+                                        textDecoration: p.sealed ? "line-through" : "none",
+                                        color: p.sealed ? "var(--c-ink-muted)" : "var(--c-ink)",
+                                      }}>
+                                        {p.label}
+                                      </span>
+                                      {p.sealed && (
+                                        <span style={{ color: "var(--c-success)", fontSize: "var(--text-xs)", flexShrink: 0 }}>
+                                          &#10003;
+                                        </span>
+                                      )}
+                                    </label>
+                                  ))}
+                                </div>
+                              </>
+                            );
+                          })()
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}

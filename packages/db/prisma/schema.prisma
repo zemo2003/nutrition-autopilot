@@ -352,6 +352,7 @@ model Client {
   clientDocuments    ClientDocument[]
   metricSeries       MetricSeries[]
   fulfillmentOrders  FulfillmentOrder[]
+  batchPortions      BatchPortion[]
 
   @@unique([organizationId, externalRef])
   @@index([organizationId])
@@ -578,6 +579,7 @@ model MealSchedule {
   composition     CompositionTemplate?  @relation(fields: [compositionId], references: [id], onDelete: Restrict)
   serviceEvent    MealServiceEvent?
   fulfillmentItem FulfillmentItem?
+  batchPortions   BatchPortion[]
 
   @@index([organizationId, clientId, serviceDate])
 }
@@ -835,6 +837,7 @@ model BatchProduction {
   outputLot       InventoryLot?         @relation("BatchOutput")
   checkpoints     BatchCheckpoint[]
   qcIssues        QcIssue[]
+  portions        BatchPortion[]
 
   @@index([organizationId, status])
   @@index([organizationId, plannedDate])
@@ -1346,4 +1349,23 @@ model DeliveryRouteStop {
   fulfillmentOrder FulfillmentOrder @relation(fields: [fulfillmentOrderId], references: [id], onDelete: Cascade)
 
   @@index([routeId, stopOrder])
+}
+
+model BatchPortion {
+  id                String    @id @default(cuid())
+  batchProductionId String
+  mealScheduleId    String?
+  clientId          String?
+  serviceDate       DateTime?
+  mealSlot          String?
+  portionG          Float
+  label             String
+  sealed            Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+
+  batchProduction BatchProduction @relation(fields: [batchProductionId], references: [id], onDelete: Cascade)
+  mealSchedule    MealSchedule?   @relation(fields: [mealScheduleId], references: [id])
+  client          Client?         @relation(fields: [clientId], references: [id])
+
+  @@index([batchProductionId])
 }

@@ -34,6 +34,9 @@ import {
   updateRouteBodySchema,
   addRouteStopsBodySchema,
   reorderRouteStopsBodySchema,
+  scheduleAwarePrepDraftBodySchema,
+  createBatchFromScheduleBodySchema,
+  updateBatchPortionBodySchema,
 } from "./schemas.js";
 
 describe("nutrientKeySchema", () => {
@@ -805,5 +808,89 @@ describe("updateClientBodySchema — delivery fields", () => {
       deliveryNotes: null,
       deliveryZone: null,
     });
+  });
+});
+
+// ============================================================================
+// Schedule-aware batch prep schemas
+// ============================================================================
+
+describe("scheduleAwarePrepDraftBodySchema", () => {
+  it("accepts dates with scheduleAware flag", () => {
+    scheduleAwarePrepDraftBodySchema.parse({
+      weekStart: "2026-03-02",
+      weekEnd: "2026-03-08",
+      scheduleAware: true,
+    });
+  });
+
+  it("accepts dates without scheduleAware (optional)", () => {
+    scheduleAwarePrepDraftBodySchema.parse({
+      weekStart: "2026-03-02",
+      weekEnd: "2026-03-08",
+    });
+  });
+
+  it("rejects invalid date format", () => {
+    expect(() =>
+      scheduleAwarePrepDraftBodySchema.parse({
+        weekStart: "March 2",
+        weekEnd: "2026-03-08",
+      })
+    ).toThrow();
+  });
+});
+
+describe("createBatchFromScheduleBodySchema", () => {
+  it("accepts valid body with optional portionSizeG", () => {
+    createBatchFromScheduleBodySchema.parse({
+      componentId: "comp-123",
+      weekStart: "2026-03-02",
+      weekEnd: "2026-03-08",
+      portionSizeG: 170,
+    });
+  });
+
+  it("accepts without portionSizeG", () => {
+    createBatchFromScheduleBodySchema.parse({
+      componentId: "comp-123",
+      weekStart: "2026-03-02",
+      weekEnd: "2026-03-08",
+    });
+  });
+
+  it("rejects empty componentId", () => {
+    expect(() =>
+      createBatchFromScheduleBodySchema.parse({
+        componentId: "",
+        weekStart: "2026-03-02",
+        weekEnd: "2026-03-08",
+      })
+    ).toThrow();
+  });
+
+  it("rejects non-positive portionSizeG", () => {
+    expect(() =>
+      createBatchFromScheduleBodySchema.parse({
+        componentId: "comp-123",
+        weekStart: "2026-03-02",
+        weekEnd: "2026-03-08",
+        portionSizeG: 0,
+      })
+    ).toThrow();
+  });
+});
+
+describe("updateBatchPortionBodySchema", () => {
+  it("accepts sealed: true", () => {
+    updateBatchPortionBodySchema.parse({ sealed: true });
+  });
+
+  it("accepts sealed: false", () => {
+    updateBatchPortionBodySchema.parse({ sealed: false });
+  });
+
+  it("rejects missing sealed", () => {
+    expect(() => updateBatchPortionBodySchema.parse({})).toThrow();
   });
 });

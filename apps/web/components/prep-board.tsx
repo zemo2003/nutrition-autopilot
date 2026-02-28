@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import ScheduleDemandPanel from "./schedule-demand-panel";
 
 function resolveApiBase() {
   if (process.env.NEXT_PUBLIC_API_BASE) return process.env.NEXT_PUBLIC_API_BASE;
@@ -41,6 +42,26 @@ type BatchSuggestion = {
   sharingOpportunity: boolean;
 };
 
+type DayBreakdown = {
+  serviceDate: string;
+  componentId: string;
+  componentName: string;
+  componentType: string;
+  totalCookedG: number;
+  rawG: number;
+  yieldFactor: number;
+  portions: { clientId: string; clientName: string; mealSlot: string; cookedG: number; mealScheduleId: string }[];
+};
+
+type PortionPlan = {
+  componentId: string;
+  componentName: string;
+  totalCookedG: number;
+  totalRawG: number;
+  portionCount: number;
+  portions: { label: string; cookedG: number; serviceDate: string; mealSlot: string; clientName: string }[];
+};
+
 type PrepDraft = {
   id?: string;
   weekStart: string;
@@ -50,6 +71,8 @@ type PrepDraft = {
   shortages: DemandItem[];
   totalMeals: number;
   totalComponents: number;
+  perDayBreakdown?: DayBreakdown[];
+  portionPlans?: PortionPlan[];
 };
 
 type SavedDraft = {
@@ -74,6 +97,7 @@ export default function PrepBoard() {
     d.setDate(d.getDate() - day + 7); // Sunday
     return d.toISOString().slice(0, 10);
   });
+  const [scheduleAware, setScheduleAware] = useState(false);
   const [draft, setDraft] = useState<PrepDraft | null>(null);
   const [savedDrafts, setSavedDrafts] = useState<SavedDraft[]>([]);
   const [loading, setLoading] = useState(false);
@@ -108,7 +132,7 @@ export default function PrepBoard() {
       const res = await fetch(`${API}/v1/prep-drafts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ weekStart, weekEnd }),
+        body: JSON.stringify({ weekStart, weekEnd, scheduleAware }),
       });
       if (!res.ok) throw new Error(`Generation failed: ${res.status}`);
       const json = await res.json();
@@ -157,6 +181,55 @@ export default function PrepBoard() {
                 <label style={{ fontWeight: 600, display: "block", marginBottom: "var(--sp-1)", fontSize: "0.85rem" }}>Week End</label>
                 <input type="date" value={weekEnd} onChange={(e) => setWeekEnd(e.target.value)} style={{ padding: "6px 10px", border: "1px solid var(--c-border)", borderRadius: 4, background: "var(--c-surface)", color: "var(--c-ink)" }} />
               </div>
+
+              {/* Schedule-Aware toggle */}
+              <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)" }}>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "var(--sp-2)",
+                    cursor: "pointer",
+                    fontSize: "var(--text-sm)",
+                    fontWeight: 500,
+                    userSelect: "none",
+                  }}
+                >
+                  <span
+                    role="switch"
+                    aria-checked={scheduleAware}
+                    onClick={() => setScheduleAware(!scheduleAware)}
+                    style={{
+                      display: "inline-block",
+                      width: 36,
+                      height: 20,
+                      borderRadius: 10,
+                      background: scheduleAware ? "var(--c-primary)" : "var(--c-border)",
+                      position: "relative",
+                      transition: "background 0.15s",
+                      cursor: "pointer",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <span style={{
+                      position: "absolute",
+                      top: 2,
+                      left: scheduleAware ? 18 : 2,
+                      width: 16,
+                      height: 16,
+                      borderRadius: "50%",
+                      background: "#fff",
+                      transition: "left 0.15s",
+                      boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                    }} />
+                  </span>
+                  Schedule-Aware
+                </label>
+                <span style={{ fontSize: "var(--text-xs)", color: "var(--c-ink-muted)" }}>
+                  Per-day &amp; per-client portions
+                </span>
+              </div>
+
               <button className="btn btn-primary" onClick={generateDraft} disabled={loading}>
                 {loading ? "Generating..." : "Generate Prep Draft"}
               </button>
@@ -179,6 +252,12 @@ export default function PrepBoard() {
                   <div className="kpi-label">Shortages</div>
                   {draft.shortages.length > 0 && <div className="kpi-note"><span className="badge badge-danger">Needs Attention</span></div>}
                 </div>
+                {draft.portionPlans && (
+                  <div className="kpi">
+                    <div className="kpi-value">{draft.portionPlans.reduce((sum, p) => sum + p.portionCount, 0)}</div>
+                    <div className="kpi-label">Individual Portions</div>
+                  </div>
+                )}
               </div>
 
               {draft.shortages.length > 0 && (
@@ -200,7 +279,22 @@ export default function PrepBoard() {
                 </div>
               )}
 
-              <div className="card" style={{ overflowX: "auto" }}>
+              {/* Schedule-Aware Breakdown */}
+              {draft.perDayBreakdown && draft.portionPlans && draft.perDayBreakdown.length > 0 && (
+                <ScheduleDemandPanel
+                  perDayBreakdown={draft.perDayBreakdown}
+                  portionPlans={draft.portionPlans}
+                  apiBase={API}
+                  weekStart={weekStart}
+                  weekEnd={weekEnd}
+                  onBatchCreated={() => {
+                    // Refresh draft to update state
+                    generateDraft();
+                  }}
+                />
+              )}
+
+              <div className="card" style={{ overflowX: "auto", marginTop: "var(--sp-4)" }}>
                 <h3 style={{ padding: "var(--sp-3) var(--sp-3) 0", fontWeight: 600 }}>Batch Suggestions</h3>
                 <table className="table">
                   <thead>

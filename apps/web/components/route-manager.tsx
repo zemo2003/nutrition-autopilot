@@ -75,11 +75,13 @@ export function RouteManager() {
       ]);
 
       if (routesRes.ok) {
-        setRoutes(await routesRes.json());
+        const rData = await routesRes.json();
+        setRoutes(Array.isArray(rData) ? rData : rData.routes ?? []);
       }
 
       if (ordersRes.ok) {
-        const allPacked: FulfillmentOrderSummary[] = await ordersRes.json();
+        const raw = await ordersRes.json();
+        const allPacked: FulfillmentOrderSummary[] = Array.isArray(raw) ? raw : raw.orders ?? [];
         // Filter to those NOT already on a route
         setUnassigned(
           allPacked

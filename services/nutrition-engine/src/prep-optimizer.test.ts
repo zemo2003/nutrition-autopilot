@@ -3,6 +3,9 @@ import {
   computeDemandRollup,
   generateBatchSuggestions,
   generatePrepDraft,
+  computePerDayBreakdown,
+  computePortionPlan,
+  generateScheduleAwarePrepDraft,
   type MealDemand,
   type YieldInfo,
   type InventoryOnHand,
@@ -208,5 +211,191 @@ describe("generatePrepDraft", () => {
     expect(draft.demand).toHaveLength(0);
     expect(draft.batchSuggestions).toHaveLength(0);
     expect(draft.shortages).toHaveLength(0);
+  });
+});
+
+// ── computePerDayBreakdown ───────────────────────────
+
+describe("computePerDayBreakdown", () => {
+  it("returns empty for no meals", () => {
+    expect(computePerDayBreakdown([], [])).toHaveLength(0);
+  });
+
+  it("groups by component and date", () => {
+    const meals: MealDemand[] = [
+      makeMeal({ mealId: "m1", serviceDate: "2026-03-03", cookedG: 180, clientId: "c1", clientName: "Alex", mealSlot: "LUNCH" }),
+      makeMeal({ mealId: "m2", serviceDate: "2026-03-03", cookedG: 200, clientId: "c2", clientName: "Sam", mealSlot: "DINNER" }),
+      makeMeal({ mealId: "m3", serviceDate: "2026-03-05", cookedG: 210, clientId: "c1", clientName: "Alex", mealSlot: "LUNCH" }),
+    ];
+    const yields = [makeYield("comp-chicken", 0.85)];
+
+    const result = computePerDayBreakdown(meals, yields);
+
+    // Two groups: (chicken, 03-03) and (chicken, 03-05)
+    expect(result).toHaveLength(2);
+
+    const mon = result[0]!;
+    expect(mon.serviceDate).toBe("2026-03-03");
+    expect(mon.totalCookedG).toBe(380);
+    expect(mon.rawG).toBeCloseTo(447.06, 1);
+    expect(mon.portions).toHaveLength(2);
+
+    const thu = result[1]!;
+    expect(thu.serviceDate).toBe("2026-03-05");
+    expect(thu.totalCookedG).toBe(210);
+    expect(thu.portions).toHaveLength(1);
+    expect(thu.portions[0]!.clientName).toBe("Alex");
+  });
+
+  it("collects per-client portions", () => {
+    const meals: MealDemand[] = [
+      makeMeal({ mealId: "m1", serviceDate: "2026-03-03", cookedG: 180, clientId: "c1", clientName: "Alex", mealSlot: "LUNCH" }),
+      makeMeal({ mealId: "m2", serviceDate: "2026-03-03", cookedG: 200, clientId: "c2", clientName: "Sam", mealSlot: "DINNER" }),
+    ];
+
+    const result = computePerDayBreakdown(meals, []);
+    const portions = result[0]!.portions;
+
+    expect(portions).toHaveLength(2);
+    expect(portions.find((p) => p.clientName === "Alex")!.cookedG).toBe(180);
+    expect(portions.find((p) => p.clientName === "Sam")!.cookedG).toBe(200);
+  });
+
+  it("skips portions for meals without client info", () => {
+    const meals: MealDemand[] = [
+      makeMeal({ mealId: "m1", cookedG: 150 }), // no clientId/clientName/mealSlot
+    ];
+
+    const result = computePerDayBreakdown(meals, []);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.totalCookedG).toBe(150);
+    expect(result[0]!.portions).toHaveLength(0);
+  });
+
+  it("sorts by date then component name", () => {
+    const meals: MealDemand[] = [
+      makeMeal({ mealId: "m1", serviceDate: "2026-03-05", componentId: "comp-rice", componentName: "Rice", cookedG: 100, clientId: "c1", clientName: "Alex", mealSlot: "LUNCH" }),
+      makeMeal({ mealId: "m2", serviceDate: "2026-03-03", componentId: "comp-chicken", componentName: "Chicken", cookedG: 180, clientId: "c1", clientName: "Alex", mealSlot: "LUNCH" }),
+      makeMeal({ mealId: "m3", serviceDate: "2026-03-03", componentId: "comp-rice", componentName: "Rice", cookedG: 200, clientId: "c2", clientName: "Sam", mealSlot: "DINNER" }),
+    ];
+
+    const result = computePerDayBreakdown(meals, []);
+    expect(result[0]!.serviceDate).toBe("2026-03-03");
+    expect(result[0]!.componentName).toBe("Chicken");
+    expect(result[1]!.serviceDate).toBe("2026-03-03");
+    expect(result[1]!.componentName).toBe("Rice");
+    expect(result[2]!.serviceDate).toBe("2026-03-05");
+  });
+});
+
+// ── computePortionPlan ───────────────────────────────
+
+describe("computePortionPlan", () => {
+  it("generates labeled portions from component demand", () => {
+    const meals: MealDemand[] = [
+      makeMeal({ mealId: "m1", serviceDate: "2026-03-03", cookedG: 180, clientId: "c1", clientName: "Alex", mealSlot: "LUNCH" }),
+      makeMeal({ mealId: "m2", serviceDate: "2026-03-05", cookedG: 210, clientId: "c2", clientName: "Sam", mealSlot: "DINNER" }),
+    ];
+    const yields = [makeYield("comp-chicken", 0.85)];
+    const rollups = computeDemandRollup(meals, yields, []);
+    const rollup = rollups[0]!;
+
+    const plan = computePortionPlan(rollup, meals);
+
+    expect(plan.componentId).toBe("comp-chicken");
+    expect(plan.portionCount).toBe(2);
+    expect(plan.totalCookedG).toBe(390);
+
+    // Sorted by date, then client (2026-03-03 = Tue, 2026-03-05 = Thu)
+    expect(plan.portions[0]!.label).toBe("Alex / Tue Lunch / 180g");
+    expect(plan.portions[0]!.serviceDate).toBe("2026-03-03");
+    expect(plan.portions[1]!.label).toBe("Sam / Thu Dinner / 210g");
+    expect(plan.portions[1]!.serviceDate).toBe("2026-03-05");
+  });
+
+  it("skips meals without client info", () => {
+    const meals: MealDemand[] = [
+      makeMeal({ mealId: "m1", cookedG: 150 }), // no client info
+    ];
+    const rollups = computeDemandRollup(meals, [], []);
+    const plan = computePortionPlan(rollups[0]!, meals);
+
+    expect(plan.portionCount).toBe(0);
+    expect(plan.portions).toHaveLength(0);
+  });
+
+  it("sorts portions by date then client name", () => {
+    const meals: MealDemand[] = [
+      makeMeal({ mealId: "m1", serviceDate: "2026-03-05", cookedG: 100, clientId: "c2", clientName: "Sam", mealSlot: "LUNCH" }),
+      makeMeal({ mealId: "m2", serviceDate: "2026-03-03", cookedG: 180, clientId: "c1", clientName: "Alex", mealSlot: "LUNCH" }),
+      makeMeal({ mealId: "m3", serviceDate: "2026-03-03", cookedG: 200, clientId: "c2", clientName: "Sam", mealSlot: "DINNER" }),
+    ];
+    const rollups = computeDemandRollup(meals, [], []);
+    const plan = computePortionPlan(rollups[0]!, meals);
+
+    expect(plan.portions[0]!.clientName).toBe("Alex");
+    expect(plan.portions[0]!.serviceDate).toBe("2026-03-03");
+    expect(plan.portions[1]!.clientName).toBe("Sam");
+    expect(plan.portions[1]!.serviceDate).toBe("2026-03-03");
+    expect(plan.portions[2]!.clientName).toBe("Sam");
+    expect(plan.portions[2]!.serviceDate).toBe("2026-03-05");
+  });
+});
+
+// ── generateScheduleAwarePrepDraft ───────────────────
+
+describe("generateScheduleAwarePrepDraft", () => {
+  it("includes base draft data plus schedule enrichments", () => {
+    const meals: MealDemand[] = [
+      makeMeal({ mealId: "m1", serviceDate: "2026-03-03", cookedG: 180, clientId: "c1", clientName: "Alex", mealSlot: "LUNCH" }),
+      makeMeal({ mealId: "m2", serviceDate: "2026-03-05", cookedG: 210, clientId: "c2", clientName: "Sam", mealSlot: "DINNER" }),
+    ];
+    const yields = [makeYield("comp-chicken", 0.85)];
+    const inventory = [makeInventory("comp-chicken", 200)];
+
+    const draft = generateScheduleAwarePrepDraft("2026-03-01", "2026-03-07", meals, yields, inventory);
+
+    // Base data present
+    expect(draft.weekStart).toBe("2026-03-01");
+    expect(draft.weekEnd).toBe("2026-03-07");
+    expect(draft.totalMeals).toBe(2);
+    expect(draft.demand).toHaveLength(1);
+    expect(draft.batchSuggestions).toHaveLength(1);
+
+    // Schedule-aware enrichments
+    expect(draft.perDayBreakdown).toBeDefined();
+    expect(draft.perDayBreakdown!.length).toBe(2); // two dates
+
+    expect(draft.portionPlans).toBeDefined();
+    expect(draft.portionPlans!.length).toBe(1); // one component
+    expect(draft.portionPlans![0]!.portionCount).toBe(2);
+  });
+
+  it("returns empty enrichments for empty meals", () => {
+    const draft = generateScheduleAwarePrepDraft("2026-03-01", "2026-03-07", [], [], []);
+
+    expect(draft.totalMeals).toBe(0);
+    expect(draft.perDayBreakdown).toHaveLength(0);
+    expect(draft.portionPlans).toHaveLength(0);
+  });
+
+  it("handles mix of schedule-aware and plain meals", () => {
+    const meals: MealDemand[] = [
+      makeMeal({ mealId: "m1", serviceDate: "2026-03-03", cookedG: 180, clientId: "c1", clientName: "Alex", mealSlot: "LUNCH" }),
+      makeMeal({ mealId: "m2", serviceDate: "2026-03-03", cookedG: 150 }), // no client info
+    ];
+
+    const draft = generateScheduleAwarePrepDraft("2026-03-01", "2026-03-07", meals, [], []);
+
+    // All meals counted in base
+    expect(draft.totalMeals).toBe(2);
+
+    // Day breakdown has one group (same component, same date)
+    expect(draft.perDayBreakdown!.length).toBe(1);
+    // But only 1 portion (the one with client info)
+    expect(draft.perDayBreakdown![0]!.portions).toHaveLength(1);
+
+    // Portion plan has 1 portion
+    expect(draft.portionPlans![0]!.portionCount).toBe(1);
   });
 });

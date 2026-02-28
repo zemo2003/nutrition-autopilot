@@ -50,7 +50,7 @@ export function DeliveryClients() {
       const res = await fetch(`${resolveApiBase()}/v1/clients`);
       if (res.ok) {
         const data = await res.json();
-        setClients(data);
+        setClients(Array.isArray(data) ? data : data.clients ?? []);
       }
     } catch {
       // silently fail
@@ -100,7 +100,8 @@ export function DeliveryClients() {
     try {
       const res = await fetch(`${resolveApiBase()}/v1/fulfillment?clientId=${clientId}`);
       if (res.ok) {
-        const data = await res.json();
+        const raw = await res.json();
+        const data = Array.isArray(raw) ? raw : raw.orders ?? [];
         setHistory(
           data.slice(0, 10).map((o: { id: string; deliveryDate: string; status: string; itemCount: number }) => ({
             id: o.id,

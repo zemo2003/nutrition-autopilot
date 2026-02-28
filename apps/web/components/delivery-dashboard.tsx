@@ -70,7 +70,8 @@ export function DeliveryDashboard() {
     try {
       const res = await fetch(`${resolveApiBase()}/v1/fulfillment?date=${selectedDate}`);
       if (res.ok) {
-        setOrders(await res.json());
+        const data = await res.json();
+        setOrders(Array.isArray(data) ? data : data.orders ?? []);
       }
     } catch {
       // silently fail
