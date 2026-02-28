@@ -1,125 +1,297 @@
-# Nutrition Autopilot
+# Numen &mdash; Nutrition Autopilot
 
-Blank-slate, database-first nutrition operations platform with deterministic label traceability.
+A database-first nutrition operations platform with deterministic label traceability, FDA-compliant rounding, and full audit lineage from ingredient to plate.
 
-## Workspace Layout
+Built for private chefs, meal prep companies, and clinical nutrition teams who need **scientifically verified** nutrition labels that survive regulatory scrutiny.
 
-- `apps/web` - Next.js operations UI
-- `apps/api` - Versioned HTTP API + orchestration + worker
-- `apps/mobile` - Expo React Native app (TestFlight target)
-- `services/nutrition-engine` - Deterministic FDA and nutrient math engine
-- `packages/db` - Prisma schema, migrations, seed, DB client
-- `packages/contracts` - Shared Zod contracts and DTOs
-- `packages/importers` - SOT and Instacart ingestion logic
+---
+
+## What It Does
+
+Numen manages the complete lifecycle of a meal prep operation across three operational modes:
+
+### Kitchen Mode
+Real-time batch prep workflow. Track batches from planned through cooking, chilling, portioning, and ready. Temperature checkpoints, hold-to-confirm buttons, pull lists, and daily summaries. Mark meals as fed and freeze their nutrition labels at serve time.
+
+### Science Mode
+Verification and quality assurance. Audit label lineage with full drill-down from final label back to source lots. Review verification tasks, detect stale labels, flag data quality issues, and track evidence grades across your entire nutrient database.
+
+### Delivery Mode
+Fulfillment and routing. Generate packing orders from scheduled meals, manage multi-stop delivery routes, print packing slips and route sheets, and track delivery status from packing through dispatch to delivery.
+
+---
+
+## Scientific Foundations
+
+Every calorie on a Numen label is traceable to a peer-reviewed formula, a government database, or a manufacturer declaration. Here is what the math is built on.
+
+### USDA & FDA Standards
+
+| Standard | What It Governs | Implementation |
+|---|---|---|
+| **USDA FoodData Central** | Nutrient values per 100g for branded and generic foods | Primary enrichment source via API; evidence grade tracked per value |
+| **USDA Cooking Yield Factors** (1992, rev. 2007) | Weight change during cooking (e.g., chicken breast loses 25%) | 60+ yield factors by ingredient with prepared-state detection |
+| **USDA Nutrient Retention Factors** (Release 6) | Nutrient loss during cooking | Applied alongside yield correction in label pipeline |
+| **21 CFR 101.9 & 101.36** | FDA Nutrition Facts label rounding rules | Nutrient-specific rounding (calories to nearest 5/10, fat to nearest 0.5/1, etc.) |
+| **FDA Daily Values (2020)** | %DV reference amounts | 40+ nutrients with mandatories, units, and display order |
+| **FDA Class I Tolerance** | Acceptable label accuracy | +/- 20% for normal foods, +/- 35% for low-calorie/high-fiber foods |
+
+### Metabolic Calculations
+
+| Formula | Use Case | Details |
+|---|---|---|
+| **Mifflin-St Jeor** | BMR estimation (primary) | Male: 10W + 6.25H - 5A + 5; Female: 10W + 6.25H - 5A - 161 |
+| **Harris-Benedict (revised)** | BMR estimation (secondary) | Male: 88.362 + 13.397W + 4.799H - 5.677A; Female: 447.593 + 9.247W + 3.098H - 4.330A |
+| **Atwater Factors** | Energy from macros | Protein: 4 kcal/g, Carbs: 4 kcal/g, Fat: 9 kcal/g |
+| **TDEE Activity Multipliers** | Total daily energy expenditure | Sedentary (1.2) through Very Active (1.9) |
+| **Goal-Based Macros** | Cut/maintain/bulk recommendations | Cut: TDEE-500, 2.2g protein/kg; Maintain: TDEE, 1.8g/kg; Bulk: TDEE+300, 2.0g/kg |
+
+### Yield Factor Database
+
+60+ ingredient-specific yield factors sourced from USDA data, covering:
+
+- **Poultry** &mdash; chicken breast (0.75), thigh (0.72), ground turkey (0.78)
+- **Beef** &mdash; ground 95/90/85/80 lean (0.78-0.64), steak (0.72), roast (0.70)
+- **Fish** &mdash; salmon (0.80), cod (0.82), shrimp (0.85)
+- **Grains** &mdash; white rice (2.50), brown rice (2.40), pasta (2.25), quinoa (2.60), oats (3.00)
+- **Vegetables** &mdash; broccoli (0.88), spinach (0.77), sweet potato (0.90)
+- **Eggs** &mdash; whole (0.92), whites (0.95)
+
+Yield correction eliminates up to 37% calorie error from raw/cooked nutrient mismatch.
+
+---
+
+## Verification Guardrails
+
+Numen enforces multiple layers of verification to catch errors before they reach a label.
+
+### Nutrient Hierarchy Invariants (FDA)
+Enforced both pre-rounding and post-rounding:
+- `carb_g >= max(sugars_g, fiber_g, sugars_g + fiber_g)`
+- `fat_g >= sat_fat_g + trans_fat_g`
+- `added_sugars_g <= sugars_g`
+- `kcal >= 50%` of Atwater estimate (catches implausibly low values)
+
+### FDA Rounding Rules (21 CFR 101.9)
+Applied at the **final label step only** to prevent rounding error accumulation:
+- Calories: <5 = 0, 5-50 = nearest 5, >50 = nearest 10
+- Fat: <0.5 = 0, 0.5-5 = nearest 0.5, >5 = nearest 1
+- Sodium: <5 = 0, 5-140 = nearest 5, >140 = nearest 10
+- And 12 more nutrient-specific rules
+
+### Evidence Grading
+Every nutrient value carries a source grade:
+- **MANUFACTURER_LABEL** &mdash; from the product package
+- **USDA_BRANDED** &mdash; USDA FoodData Central branded product
+- **USDA_GENERIC** &mdash; USDA generic/SR Legacy entry
+- **OPENFOODFACTS** &mdash; community database
+- **INFERRED_FROM_INGREDIENT** / **INFERRED_FROM_SIMILAR_PRODUCT** &mdash; algorithmic estimate
+- **HISTORICAL_EXCEPTION** &mdash; manually approved override
+
+Labels track verified, inferred, exception, and unverified counts. Incomplete core nutrients are allowed but flagged **PROVISIONAL**.
+
+### Verification Task Queue
+Automated detection of data issues:
+- **SOURCE_RETRIEVAL** &mdash; missing nutrient data needs sourcing
+- **CONSISTENCY** &mdash; values contradict each other
+- **LINEAGE_INTEGRITY** &mdash; ingredient sourcing chain broken
+
+Each task carries severity (LOW through CRITICAL) and requires human resolution (APPROVED / REJECTED / RESOLVED).
+
+### Batch QC Controls
+- Temperature checkpoint enforcement at each batch stage
+- Yield variance alerts: warning at >15%, critical alert + verification task at >30%
+- Issue types: TEMP_MISS, CHILL_TIME_EXCEEDED, MISSING_CHECKPOINT, LATE_CHECKPOINT, YIELD_VARIANCE_CRITICAL
+- Append-only checkpoint log (immutable audit trail)
+
+### Label Freeze
+When a meal is marked "Fed," the nutrition label is frozen from the actual lots consumed. This snapshot is immutable, creating a permanent, auditable record of exactly what nutrients were served.
+
+---
+
+## Label Computation Pipeline
+
+The nutrition engine is a pure, deterministic math library with zero database dependencies:
+
+1. **Yield Correction** &mdash; Detects mismatch between recipe prepared state and lot nutrient profile state; applies USDA yield factor
+2. **Nutrient Aggregation** &mdash; Scales each of 40+ nutrients by (grams consumed / 100) per lot, sums across all lots, divides by servings
+3. **Hierarchy Enforcement** &mdash; Clamps sub-components to FDA invariants (pre-rounding)
+4. **FDA Rounding** &mdash; Applies nutrient-specific rounding per 21 CFR 101.9
+5. **Post-Rounding Clamps** &mdash; Re-enforces hierarchy after rounding
+6. **%DV Calculation** &mdash; Against 2020 FDA Daily Values
+7. **Allergen Declaration** &mdash; Auto-generates "Contains:" statement for the 9 major allergens (milk, egg, fish, shellfish, tree nuts, peanuts, wheat, soy, sesame)
+8. **QA Check** &mdash; Validates Atwater energy vs. labeled calories within FDA tolerance
+
+---
+
+## Features
+
+### Meal Planning
+- Schedule meals by client, date, and slot (breakfast through pre-bed)
+- ChatGPT Custom GPT Action for natural-language meal planning
+- Composition engine with macro split analysis and allergen compatibility checks
+- Prep draft generation with weekly planning
+
+### Inventory
+- FIFO lot tracking (earliest expiry consumed first)
+- Par level management with 72-hour demand horizon alerts
+- Inventory projections, demand forecasting, waste summaries
+- Allocation tracking across active batches
+
+### Import & Integration
+- **SOT (Source of Truth)** &mdash; Excel workbook import for SKU catalog, recipes, and ingredients
+- **Instacart CSV** &mdash; Order history import with auto-mapping to ingredient catalog
+- **Gmail Auto-Import** &mdash; OAuth-connected automatic parsing of Instacart order confirmation emails
+- **ChatGPT GPT Action** &mdash; Push meal plans via natural language (OpenAPI 3.1 spec at `/v1/openapi.json`)
+- **USDA Enrichment** &mdash; Async nutrient enrichment from FoodData Central API
+- **Pilot Backfill** &mdash; Historical week import for onboarding
+
+### Client Health Tracking
+- Biometric snapshots (weight, body fat %, lean mass, resting HR)
+- Trend detection (up/down/stable with 1% threshold)
+- Time-series metrics (CGM, bloodwork, custom)
+- Weekly nutrition aggregation (7d, 30d, 60d, 90d rolling averages)
+- Document management (DEXA scans, bloodwork PDFs)
+- Printable progress reports
+
+### Kitchen Operations
+- Batch production with 10 checkpoint types
+- Temperature logging and chill time validation
+- Sauce library with variants (standard, low-fat, high-fat) and component pairings
+- Yield calibration with variance analytics
+- Substitution engine with approval workflow
+- Printable pull lists, daily summaries, and batch prep sheets
+
+### Delivery Operations
+- Fulfillment order generation from scheduled meals
+- Packing station with per-item controls
+- Multi-stop route planning with drag reorder
+- Route dispatch with bulk status updates
+- Printable packing slips, delivery manifests, and route sheets
+- Dual delivery addresses per client (home + work)
+
+---
+
+## Testing
+
+**856+ tests** across the monorepo, run with Vitest:
+
+```bash
+npm test                                    # all workspaces
+npm run -w services/nutrition-engine test   # nutrition-engine only
+```
+
+The nutrition engine alone has **743 tests** across 18 test suites covering:
+- 151 core engine tests (label computation, yield correction, nutrient aggregation)
+- 53 scientific QA tests (yield factors, unit conversion, FDA rounding, Atwater validation, hierarchy enforcement)
+- 47 yield calibration tests
+- 30 inventory projection tests
+- 25 prep optimizer tests
+- 173 metrics engine tests
+- 49 biometrics engine tests
+- 24 composition engine tests
+- 23 sauce nutrient tests (scaling, variants, rounding, allergens)
+- 20 reproducibility tests
+- 26 mapping score tests
+- 20 substitution engine tests
+- 20 TDEE engine tests
+- And more
+
+---
+
+## Architecture
+
+```
+apps/
+  api/              Express API + background worker
+  web/              Next.js 15 operations UI (30+ routes)
+  mobile/           Expo React Native (TestFlight)
+
+services/
+  nutrition-engine/ Pure deterministic math (no DB, ESM-only, 743 tests)
+
+packages/
+  db/               Prisma schema + PostgreSQL (Neon)
+  contracts/        Zod validation schemas
+  importers/        SOT, Instacart, pilot meal parsing
+```
+
+**Stack:** TypeScript, ESM throughout, Express, Next.js 15, Prisma, PostgreSQL (Neon), Vitest, Zod
+
+---
 
 ## Quick Start
 
 ```bash
-cp .env.example .env
+cp .env.example .env        # configure DATABASE_URL
 npm install
 npm run db:generate
 npm run db:migrate
 npm run db:seed
-npm run dev:api
+npm run dev:api             # starts API on :4000
 ```
 
 In another terminal:
 
 ```bash
-npm run dev:web
+npm run dev:web             # starts web on :3000
 ```
 
-Mobile app:
+## Deploy to Render
 
-```bash
-npm run dev:mobile
-```
+This repo includes a `render.yaml` blueprint for one-click deploy:
 
-SOT template generator:
+1. In Render, click **New +** > **Blueprint**
+2. Connect GitHub repo: `zemo2003/nutrition-autopilot`
+3. Render detects 3 services: API, Web, Worker
+4. Set required env vars:
+   - `nutrition-autopilot-api`: `DATABASE_URL` (Neon Postgres URL)
+   - `nutrition-autopilot-web`: `NEXT_PUBLIC_API_BASE` and `API_BASE` (API public URL)
+5. Deploy
 
-```bash
-npm run sot:template
-```
+### Optional Env Vars
 
-Writes `/Users/daniel/Desktop/Nutrition_Autopilot_SOT.xlsx`.
+| Variable | Service | Purpose |
+|---|---|---|
+| `NUMEN_API_KEY` | API | Bearer token for ChatGPT GPT Action |
+| `GOOGLE_CLIENT_ID` | API + Worker | Gmail OAuth (Instacart auto-import) |
+| `GOOGLE_CLIENT_SECRET` | API + Worker | Gmail OAuth |
+| `GOOGLE_REDIRECT_URI` | API + Worker | Gmail OAuth callback URL |
+| `WEB_PUBLIC_URL` | API | Web app URL for OAuth redirects |
 
-## API v1
+---
 
-- `POST /v1/imports/sot` (`multipart/form-data`: `file`, `mode=dry-run|commit`)
-- `POST /v1/imports/instacart-orders` (`multipart/form-data`: `file`, `mode=dry-run|commit`)
-- `POST /v1/pilot/backfill-week` (`multipart/form-data`: `meal_file`, optional `lot_file`, optional `week_start_date`, `purchase_date`, `client_external_ref`, `client_name`, `mode`)
-- `POST /v1/instacart/drafts/generate`
-- `PATCH /v1/schedule/:id/status`
-- `GET /v1/clients/:clientId/calendar?month=YYYY-MM`
-- `GET /v1/meals/:serviceEventId`
-- `GET /v1/labels/:labelId`
-- `GET /v1/labels/:labelId/lineage`
-- `GET /v1/verification/tasks`
-- `PATCH /v1/verification/tasks/:id`
-- `GET /v1/system/state`
-- `GET /v1/clients`
+## API
+
+100+ versioned REST endpoints under `/v1/`. Key groups:
+
+- **Import** &mdash; SOT workbook, Instacart CSV, pilot backfill, Gmail sync
+- **Schedules** &mdash; CRUD, bulk status, label preview
+- **Labels** &mdash; Detail, lineage tree, stale detection, refresh
+- **Inventory** &mdash; Lots, projections, demand forecast, waste, par levels
+- **Batches** &mdash; Production workflow, checkpoints, portions, yield validation
+- **Clients** &mdash; Profiles, biometrics, metrics, documents, health summary
+- **Verification** &mdash; Task queue, data quality summary
+- **Fulfillment** &mdash; Order generation, packing, routing, dispatch
+- **ChatGPT** &mdash; OpenAPI spec, client/SKU listing, meal plan push
+- **Gmail** &mdash; OAuth flow, sync trigger, connection status
+
+Full OpenAPI spec: `GET /v1/openapi.json`
+
+---
 
 ## Core Rules
 
-1. Empty-state UI until SOT import committed.
-2. Labels are frozen at serve time from consumed lots.
-3. Label lineage graph is immutable and drill-down capable.
-4. Agent writes are proposal-only; human approval required before mutation.
+1. Labels are frozen at serve time from the actual lots consumed &mdash; immutable once created
+2. Label lineage is fully auditable with drill-down to source lots, recipes, and ingredients
+3. FDA rounding is applied at the final step only to prevent error accumulation
+4. Nutrient hierarchy invariants are enforced both pre- and post-rounding
+5. Yield correction is automatic when recipe and lot prepared states differ
+6. All lot consumption follows FIFO (first expiry, first out)
+7. Verification tasks require human resolution &mdash; no silent auto-approval
 
-## Fastest Web-First Pilot Path
+---
 
-1. Start API + web:
+## License
 
-```bash
-npm run dev:api
-npm run dev:web
-```
-
-2. Open web upload center:
-
-`http://localhost:3000/upload`
-
-3. Run `Pilot Backfill (Historical Week)` with:
-
-- `meal_file`: `/Users/daniel/Downloads/Alex_Week_Workbook_FullDetail.xlsx`
-- `lot_file`: `/Users/daniel/Downloads/Walmart_Receipt_Complete_With_Item_Name.xlsx` (or detailed lot CSV)
-- `week_start_date`: `2026-02-16`
-- `mode`: `commit`
-
-4. Open served calendar and printable labels:
-
-- `http://localhost:3000/clients/<clientId>/calendar?month=2026-02`
-- label detail: `/labels/<labelId>`
-- print view: `/labels/<labelId>/print`
-
-## Get It Online (Browser Access Anywhere)
-
-This repo now includes `/Users/daniel/Documents/GitHub/nutrition-autopilot/render.yaml` for Render Blueprint deploy.
-
-### Render Deploy Steps
-
-1. In Render, click **New +** -> **Blueprint**.
-2. Connect GitHub repo: `zemo2003/nutrition-autopilot`.
-3. Render will detect 2 web services from `render.yaml`:
-   - `nutrition-autopilot-api`
-   - `nutrition-autopilot-web`
-4. Set required env vars before first deploy:
-   - On `nutrition-autopilot-api`: `DATABASE_URL` = your Neon Postgres URL.
-   - On `nutrition-autopilot-web`: `NEXT_PUBLIC_API_BASE` = the public URL of `nutrition-autopilot-api` (for example `https://nutrition-autopilot-api.onrender.com`).
-5. Deploy both services.
-
-After deploy:
-- Web app URL: `https://<your-web-service>.onrender.com`
-- Upload/backfill page: `https://<your-web-service>.onrender.com/upload`
-
-### Optional: Re-Backfill Pilot Week In Hosted Env
-
-From hosted web upload page, run **Pilot Backfill (Historical Week)** again, or use:
-
-```bash
-API_BASE="https://<your-api-service>.onrender.com" npm run pilot:backfill
-```
-
-## GitHub + DB + TestFlight
-
-See `/Users/daniel/Desktop/nutrition-autopilot/docs/LAUNCH_SETUP.md`.
+Private repository. All rights reserved.
