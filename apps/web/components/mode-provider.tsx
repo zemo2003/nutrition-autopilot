@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
 
-export type AppMode = "kitchen" | "science";
+export type AppMode = "kitchen" | "science" | "delivery";
 
 interface ModeContextValue {
   mode: AppMode | null;

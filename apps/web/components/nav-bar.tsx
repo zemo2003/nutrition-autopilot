@@ -33,7 +33,14 @@ const SCIENCE_NAV = [
   { href: "/ops", label: "Ops Tower", icon: "gauge" },
 ] as const;
 
-type IconName = "calendar" | "clipboard" | "box" | "person" | "chart" | "shield" | "gauge";
+const DELIVERY_NAV = [
+  { href: "/", label: "Today", icon: "truck" },
+  { href: "/packing", label: "Packing", icon: "package" },
+  { href: "/routes", label: "Routes", icon: "route" },
+  { href: "/delivery-clients", label: "Clients", icon: "person" },
+] as const;
+
+type IconName = "calendar" | "clipboard" | "box" | "person" | "chart" | "shield" | "gauge" | "truck" | "package" | "route";
 
 function TabIcon({ name }: { name: IconName }) {
   const props = { width: 22, height: 22, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
@@ -53,6 +60,12 @@ function TabIcon({ name }: { name: IconName }) {
       return <svg {...props}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>;
     case "gauge":
       return <svg {...props}><path d="M12 2a10 10 0 100 20 10 10 0 000-20z"/><path d="M12 6v6l4 2"/></svg>;
+    case "truck":
+      return <svg {...props}><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v3a1 1 0 01-1 1h-1"/><path d="M16 17h-8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>;
+    case "package":
+      return <svg {...props}><path d="M16.5 9.4l-9-5.19M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>;
+    case "route":
+      return <svg {...props}><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 000-7h-11a3.5 3.5 0 010-7H15"/><circle cx="18" cy="5" r="3"/></svg>;
   }
 }
 
@@ -84,7 +97,7 @@ export function NavBar() {
   // Don't render nav when no mode selected (mode picker screen)
   if (!mode) return null;
 
-  const navLinks = mode === "kitchen" ? KITCHEN_NAV : SCIENCE_NAV;
+  const navLinks = mode === "kitchen" ? KITCHEN_NAV : mode === "delivery" ? DELIVERY_NAV : SCIENCE_NAV;
 
   const isActive = (href: string) => {
     if (href === "/" && pathname === "/") return true;
@@ -113,6 +126,12 @@ export function NavBar() {
               onClick={() => setMode("science")}
             >
               Science
+            </button>
+            <button
+              className={`mode-pill-option ${mode === "delivery" ? "active delivery" : ""}`}
+              onClick={() => setMode("delivery")}
+            >
+              Delivery
             </button>
           </div>
 

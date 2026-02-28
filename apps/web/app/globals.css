@@ -279,6 +279,7 @@ h1, h2, h3, h4 {
 
 .bottom-tab[data-active="true"] { color: var(--c-primary); }
 [data-mode="science"] .bottom-tab[data-active="true"] { color: var(--c-info); }
+[data-mode="delivery"] .bottom-tab[data-active="true"] { color: var(--c-accent); }
 
 /* ── Cards ──────────────────────────────────────────── */
 .card {
@@ -1118,6 +1119,7 @@ pre {
 
 .mode-card-kitchen:hover { border-color: var(--c-primary); }
 .mode-card-science:hover { border-color: var(--c-info); }
+.mode-card-delivery:hover { border-color: var(--c-accent); }
 
 .mode-card-icon {
   width: 80px;
@@ -1135,6 +1137,11 @@ pre {
 .mode-card-science .mode-card-icon {
   background: var(--c-info-soft);
   color: var(--c-info);
+}
+
+.mode-card-delivery .mode-card-icon {
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
 }
 
 .mode-card-title {
@@ -1165,6 +1172,11 @@ pre {
 .mode-card-science .mode-card-cta {
   background: var(--c-info-soft);
   color: var(--c-info);
+}
+
+.mode-card-delivery .mode-card-cta {
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
 }
 
 .mode-card:hover .mode-card-cta { opacity: 0.9; }
@@ -1201,6 +1213,11 @@ pre {
 
 .mode-pill-option.active.science {
   background: var(--c-info);
+  color: #0a0a0b;
+}
+
+.mode-pill-option.active.delivery {
+  background: var(--c-accent);
   color: #0a0a0b;
 }
 

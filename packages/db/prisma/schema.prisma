@@ -158,6 +158,21 @@ enum SauceVariantType {
   HIGH_FAT
 }
 
+enum FulfillmentStatus {
+  PENDING
+  PACKING
+  PACKED
+  DISPATCHED
+  DELIVERED
+  FAILED
+}
+
+enum RouteStatus {
+  PLANNING
+  DISPATCHED
+  COMPLETE
+}
+
 enum BatchCheckpointType {
   PREP_START
   COOK_START
@@ -241,6 +256,8 @@ model Organization {
   biometricSnapshots    BiometricSnapshot[]
   clientDocuments       ClientDocument[]
   metricSeries          MetricSeries[]
+  fulfillmentOrders     FulfillmentOrder[]
+  deliveryRoutes        DeliveryRoute[]
 }
 
 model User {
@@ -258,6 +275,7 @@ model User {
   roles         UserRole[]
   serviceEvents MealServiceEvent[]   @relation("servedByUser")
   reviewActions VerificationReview[] @relation("reviewedByUser")
+  packedOrders  FulfillmentOrder[]   @relation("packedByUser")
 
   @@unique([organizationId, email])
   @@index([organizationId])
@@ -319,6 +337,9 @@ model Client {
   targetBodyFatPct         Float?
   bodyCompositionSnapshots Json?
   fileRecords              Json?
+  deliveryAddress          String?
+  deliveryNotes            String?
+  deliveryZone             String?
   createdAt                DateTime @default(now())
   createdBy                String   @default("system")
   updatedAt                DateTime @updatedAt
@@ -330,6 +351,7 @@ model Client {
   biometricSnapshots BiometricSnapshot[]
   clientDocuments    ClientDocument[]
   metricSeries       MetricSeries[]
+  fulfillmentOrders  FulfillmentOrder[]
 
   @@unique([organizationId, externalRef])
   @@index([organizationId])
@@ -550,11 +572,12 @@ model MealSchedule {
   updatedAt       DateTime       @updatedAt
   version         Int            @default(1)
 
-  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  client       Client                @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  sku          Sku?                  @relation(fields: [skuId], references: [id], onDelete: Restrict)
-  composition  CompositionTemplate?  @relation(fields: [compositionId], references: [id], onDelete: Restrict)
-  serviceEvent MealServiceEvent?
+  organization    Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client          Client                @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  sku             Sku?                  @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  composition     CompositionTemplate?  @relation(fields: [compositionId], references: [id], onDelete: Restrict)
+  serviceEvent    MealServiceEvent?
+  fulfillmentItem FulfillmentItem?
 
   @@index([organizationId, clientId, serviceDate])
 }
@@ -1235,4 +1258,92 @@ model PrepDraft {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, weekStart])
+}
+
+// ─── Delivery Mode ────────────────────────────────────────────────────────────
+
+model FulfillmentOrder {
+  id              String            @id @default(cuid())
+  organizationId  String
+  clientId        String
+  deliveryDate    DateTime
+  status          FulfillmentStatus @default(PENDING)
+
+  // Delivery details (snapshot from client at creation time)
+  deliveryAddress String?
+  deliveryNotes   String?
+  deliveryZone    String?
+
+  // Timestamps
+  packedAt       DateTime?
+  packedByUserId String?
+  dispatchedAt   DateTime?
+  deliveredAt    DateTime?
+  failedAt       DateTime?
+  failureReason  String?
+
+  createdAt DateTime @default(now())
+  createdBy String   @default("system")
+  updatedAt DateTime @updatedAt
+  version   Int      @default(1)
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client             @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  packedBy     User?              @relation("packedByUser", fields: [packedByUserId], references: [id], onDelete: SetNull)
+  items        FulfillmentItem[]
+  routeStop    DeliveryRouteStop?
+
+  @@unique([organizationId, clientId, deliveryDate])
+  @@index([organizationId, deliveryDate])
+  @@index([organizationId, status])
+}
+
+model FulfillmentItem {
+  id                 String  @id @default(cuid())
+  fulfillmentOrderId String
+  mealScheduleId     String  @unique
+  packed             Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  fulfillmentOrder FulfillmentOrder @relation(fields: [fulfillmentOrderId], references: [id], onDelete: Cascade)
+  mealSchedule     MealSchedule     @relation(fields: [mealScheduleId], references: [id], onDelete: Restrict)
+}
+
+model DeliveryRoute {
+  id              String      @id @default(cuid())
+  organizationId  String
+  routeDate       DateTime
+  name            String
+  status          RouteStatus @default(PLANNING)
+  driverName      String?
+  notes           String?
+  dispatchedAt    DateTime?
+  completedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  createdBy String   @default("system")
+  updatedAt DateTime @updatedAt
+  version   Int      @default(1)
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  stops        DeliveryRouteStop[]
+
+  @@index([organizationId, routeDate])
+}
+
+model DeliveryRouteStop {
+  id                 String @id @default(cuid())
+  routeId            String
+  fulfillmentOrderId String @unique
+  stopOrder          Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  route            DeliveryRoute    @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  fulfillmentOrder FulfillmentOrder @relation(fields: [fulfillmentOrderId], references: [id], onDelete: Cascade)
+
+  @@index([routeId, stopOrder])
 }

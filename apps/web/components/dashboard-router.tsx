@@ -4,6 +4,7 @@ import { useMode } from "./mode-provider";
 import { ModePicker } from "./mode-picker";
 import { KitchenDashboard } from "./kitchen-dashboard";
 import { ScienceDashboard } from "./science-dashboard";
+import { DeliveryDashboard } from "./delivery-dashboard";
 
 type DashboardData = {
   counts: {
@@ -82,6 +83,10 @@ export function DashboardRouter({ data }: { data: DashboardData }) {
         sauceCount={data.sauceCount}
       />
     );
+  }
+
+  if (mode === "delivery") {
+    return <DeliveryDashboard />;
   }
 
   return (

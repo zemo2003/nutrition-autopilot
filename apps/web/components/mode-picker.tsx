@@ -45,6 +45,23 @@ export function ModePicker() {
             <p className="mode-card-desc">Verify. Audit. Analyze.</p>
             <span className="mode-card-cta">Enter Lab &rarr;</span>
           </button>
+
+          <button className="mode-card mode-card-delivery" onClick={pick("delivery")}>
+            <div className="mode-card-icon">
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="6" y="10" width="22" height="18" rx="2" />
+                <path d="M28 16h6l6 8v4a2 2 0 01-2 2h-2" />
+                <path d="M28 28h-8" />
+                <circle cx="15" cy="32" r="3" />
+                <circle cx="35" cy="32" r="3" />
+                <line x1="10" y1="16" x2="22" y2="16" />
+                <line x1="10" y1="21" x2="18" y2="21" />
+              </svg>
+            </div>
+            <h2 className="mode-card-title">Delivery Mode</h2>
+            <p className="mode-card-desc">Pack. Route. Deliver.</p>
+            <span className="mode-card-cta">Enter Dispatch &rarr;</span>
+          </button>
         </div>
       </div>
     </div>

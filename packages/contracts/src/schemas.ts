@@ -180,6 +180,9 @@ export const updateClientBodySchema = z.object({
   targetFatG: z.number().nonnegative().finite().optional().nullable(),
   targetWeightKg: z.number().positive().finite().optional().nullable(),
   targetBodyFatPct: z.number().min(0).max(100).optional().nullable(),
+  deliveryAddress: z.string().optional().nullable(),
+  deliveryNotes: z.string().optional().nullable(),
+  deliveryZone: z.string().optional().nullable(),
 });
 
 export const createBodyCompositionBodySchema = z.object({
@@ -268,6 +271,43 @@ export const createMetricBodySchema = z.object({
   sourceDocumentId: z.string().optional(),
   verification: z.enum(["UNVERIFIED", "SELF_REPORTED", "PROVIDER_VERIFIED"]).optional(),
   notes: z.string().optional(),
+});
+
+// ============================================================================
+// DELIVERY MODE
+// ============================================================================
+
+export const generateFulfillmentBodySchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD"),
+});
+
+export const updateFulfillmentStatusBodySchema = z.object({
+  status: z.enum(["PENDING", "PACKING", "PACKED", "DISPATCHED", "DELIVERED", "FAILED"]),
+  failureReason: z.string().min(1).optional(),
+});
+
+export const createRouteBodySchema = z.object({
+  routeDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD"),
+  name: z.string().min(1),
+  driverName: z.string().optional(),
+  notes: z.string().optional(),
+});
+
+export const updateRouteBodySchema = z.object({
+  name: z.string().min(1).optional(),
+  driverName: z.string().optional().nullable(),
+  notes: z.string().optional().nullable(),
+});
+
+export const addRouteStopsBodySchema = z.object({
+  stops: z.array(z.object({
+    fulfillmentOrderId: z.string().min(1),
+    stopOrder: z.number().int().positive(),
+  })).min(1),
+});
+
+export const reorderRouteStopsBodySchema = z.object({
+  stopIds: z.array(z.string().min(1)).min(1),
 });
 
 // ============================================================================

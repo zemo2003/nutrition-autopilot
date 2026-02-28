@@ -28,6 +28,12 @@ import {
   overrideQcIssueBodySchema,
   createBiometricBodySchema,
   createMetricBodySchema,
+  generateFulfillmentBodySchema,
+  updateFulfillmentStatusBodySchema,
+  createRouteBodySchema,
+  updateRouteBodySchema,
+  addRouteStopsBodySchema,
+  reorderRouteStopsBodySchema,
 } from "./schemas.js";
 
 describe("nutrientKeySchema", () => {
@@ -675,5 +681,129 @@ describe("bulkScheduleStatusBodySchema", () => {
     expect(() =>
       bulkScheduleStatusBodySchema.parse({ scheduleIds: ids, status: "DONE" })
     ).toThrow();
+  });
+});
+
+// ─── Delivery Mode Schemas ────────────────────────────────────────────────────
+
+describe("generateFulfillmentBodySchema", () => {
+  it("accepts valid YYYY-MM-DD date", () => {
+    generateFulfillmentBodySchema.parse({ date: "2026-03-01" });
+  });
+
+  it("rejects invalid date format", () => {
+    expect(() => generateFulfillmentBodySchema.parse({ date: "March 1" })).toThrow();
+    expect(() => generateFulfillmentBodySchema.parse({ date: "2026-3-1" })).toThrow();
+  });
+});
+
+describe("updateFulfillmentStatusBodySchema", () => {
+  it("accepts all valid fulfillment statuses", () => {
+    for (const status of ["PENDING", "PACKING", "PACKED", "DISPATCHED", "DELIVERED", "FAILED"]) {
+      expect(() => updateFulfillmentStatusBodySchema.parse({ status })).not.toThrow();
+    }
+  });
+
+  it("accepts FAILED with failureReason", () => {
+    const result = updateFulfillmentStatusBodySchema.parse({
+      status: "FAILED",
+      failureReason: "No one home",
+    });
+    expect(result.failureReason).toBe("No one home");
+  });
+
+  it("rejects unknown status", () => {
+    expect(() => updateFulfillmentStatusBodySchema.parse({ status: "CANCELLED" })).toThrow();
+  });
+
+  it("rejects empty failureReason", () => {
+    expect(() =>
+      updateFulfillmentStatusBodySchema.parse({ status: "FAILED", failureReason: "" })
+    ).toThrow();
+  });
+});
+
+describe("createRouteBodySchema", () => {
+  it("accepts valid route", () => {
+    createRouteBodySchema.parse({ routeDate: "2026-03-01", name: "North Route" });
+  });
+
+  it("accepts with optional fields", () => {
+    const result = createRouteBodySchema.parse({
+      routeDate: "2026-03-01",
+      name: "Evening Run",
+      driverName: "Mike",
+      notes: "Use back entrance at building C",
+    });
+    expect(result.driverName).toBe("Mike");
+  });
+
+  it("rejects missing name", () => {
+    expect(() => createRouteBodySchema.parse({ routeDate: "2026-03-01" })).toThrow();
+  });
+
+  it("rejects invalid date", () => {
+    expect(() => createRouteBodySchema.parse({ routeDate: "bad", name: "Test" })).toThrow();
+  });
+});
+
+describe("updateRouteBodySchema", () => {
+  it("accepts partial update", () => {
+    updateRouteBodySchema.parse({ name: "South Route" });
+    updateRouteBodySchema.parse({ driverName: null });
+    updateRouteBodySchema.parse({ notes: "Updated notes" });
+  });
+
+  it("rejects empty name", () => {
+    expect(() => updateRouteBodySchema.parse({ name: "" })).toThrow();
+  });
+});
+
+describe("addRouteStopsBodySchema", () => {
+  it("accepts valid stops", () => {
+    addRouteStopsBodySchema.parse({
+      stops: [
+        { fulfillmentOrderId: "fo-1", stopOrder: 1 },
+        { fulfillmentOrderId: "fo-2", stopOrder: 2 },
+      ],
+    });
+  });
+
+  it("rejects empty stops array", () => {
+    expect(() => addRouteStopsBodySchema.parse({ stops: [] })).toThrow();
+  });
+
+  it("rejects non-positive stopOrder", () => {
+    expect(() =>
+      addRouteStopsBodySchema.parse({ stops: [{ fulfillmentOrderId: "fo-1", stopOrder: 0 }] })
+    ).toThrow();
+  });
+});
+
+describe("reorderRouteStopsBodySchema", () => {
+  it("accepts valid stop ID list", () => {
+    reorderRouteStopsBodySchema.parse({ stopIds: ["s-1", "s-2", "s-3"] });
+  });
+
+  it("rejects empty list", () => {
+    expect(() => reorderRouteStopsBodySchema.parse({ stopIds: [] })).toThrow();
+  });
+});
+
+describe("updateClientBodySchema — delivery fields", () => {
+  it("accepts delivery address", () => {
+    updateClientBodySchema.parse({ deliveryAddress: "123 Main St, Anytown, USA" });
+  });
+
+  it("accepts delivery zone", () => {
+    updateClientBodySchema.parse({ deliveryZone: "North" });
+  });
+
+  it("accepts null delivery fields (clear)", () => {
+    updateClientBodySchema.parse({
+      deliveryAddress: null,
+      deliveryNotes: null,
+      deliveryZone: null,
+    });
   });
 });

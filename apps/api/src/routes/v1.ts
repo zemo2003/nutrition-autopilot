@@ -6,7 +6,7 @@ import { execFile as execFileCb } from "node:child_process";
 import express from "express";
 import multer from "multer";
 import { addHours, endOfMonth, parse, startOfMonth, subDays, startOfDay, endOfDay, format } from "date-fns";
-import { prisma, NutrientSourceType, VerificationStatus, VerificationTaskStatus, VerificationTaskSeverity, ScheduleStatus, BatchStatus, ComponentType, StorageLocation, SauceVariantType, BatchCheckpointType, MappingResolutionSource, SubstitutionStatus, CalibrationStatus, QcIssueType, MealSource, PrepDraftStatus, DocumentType, ParsingStatus, MetricVerification } from "@nutrition/db";
+import { prisma, NutrientSourceType, VerificationStatus, VerificationTaskStatus, VerificationTaskSeverity, ScheduleStatus, BatchStatus, ComponentType, StorageLocation, SauceVariantType, BatchCheckpointType, MappingResolutionSource, SubstitutionStatus, CalibrationStatus, QcIssueType, MealSource, PrepDraftStatus, DocumentType, ParsingStatus, MetricVerification, FulfillmentStatus, RouteStatus } from "@nutrition/db";
 import { parseInstacartOrders, parsePilotMeals, parseSotWorkbook, mapOrderLineToIngredient } from "@nutrition/importers";
 import { getDefaultUser, getPrimaryOrganization } from "../lib/context.js";
 import { freezeLabelFromScheduleDone, buildLineageTree } from "../lib/label-freeze.js";
@@ -35,6 +35,12 @@ import {
   overrideQcIssueBodySchema,
   createBiometricBodySchema,
   createMetricBodySchema,
+  generateFulfillmentBodySchema,
+  updateFulfillmentStatusBodySchema,
+  createRouteBodySchema,
+  updateRouteBodySchema,
+  addRouteStopsBodySchema,
+  reorderRouteStopsBodySchema,
 } from "@nutrition/contracts";
 import { z } from "zod";
 
@@ -2770,6 +2776,7 @@ v1Router.patch("/clients/:clientId", async (req, res) => {
     email, phone, heightCm, weightKg, goals, preferences, exclusions,
     dateOfBirth, sex, activityLevel,
     targetKcal, targetProteinG, targetCarbG, targetFatG, targetWeightKg, targetBodyFatPct,
+    deliveryAddress, deliveryNotes, deliveryZone,
   } = req.body as Record<string, unknown>;
 
   const client = await prisma.client.findFirst({
@@ -2796,6 +2803,9 @@ v1Router.patch("/clients/:clientId", async (req, res) => {
   if (targetFatG !== undefined) data.targetFatG = targetFatG;
   if (targetWeightKg !== undefined) data.targetWeightKg = targetWeightKg;
   if (targetBodyFatPct !== undefined) data.targetBodyFatPct = targetBodyFatPct;
+  if (deliveryAddress !== undefined) data.deliveryAddress = deliveryAddress;
+  if (deliveryNotes !== undefined) data.deliveryNotes = deliveryNotes;
+  if (deliveryZone !== undefined) data.deliveryZone = deliveryZone;
 
   const updated = await prisma.client.update({
     where: { id: clientId },
@@ -2821,6 +2831,9 @@ v1Router.patch("/clients/:clientId", async (req, res) => {
     targetFatG: updated.targetFatG,
     targetWeightKg: updated.targetWeightKg,
     targetBodyFatPct: updated.targetBodyFatPct,
+    deliveryAddress: updated.deliveryAddress,
+    deliveryNotes: updated.deliveryNotes,
+    deliveryZone: updated.deliveryZone,
   });
 });
 
@@ -5489,4 +5502,836 @@ v1Router.get("/control-tower", async (req, res) => {
   });
 
   return res.json(summary);
+});
+
+// ── Fulfillment Orders ──────────────────────────────────────────
+
+/** Auto-generate fulfillment orders from PLANNED schedules for a date */
+v1Router.post("/fulfillment/generate", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const user = await getDefaultUser();
+  const body = validateBody(generateFulfillmentBodySchema, req.body, res);
+  if (!body) return;
+
+  const deliveryDate = parseDateOnlyUtc(body.date);
+  const dayStart = startOfDay(deliveryDate);
+  const dayEnd = endOfDay(deliveryDate);
+
+  // Find all PLANNED schedules for this date
+  const schedules = await prisma.mealSchedule.findMany({
+    where: {
+      organizationId: org.id,
+      serviceDate: { gte: dayStart, lte: dayEnd },
+      status: "PLANNED",
+    },
+    include: { client: true },
+  });
+
+  // Group by clientId
+  const byClient = new Map<string, typeof schedules>();
+  for (const s of schedules) {
+    const arr = byClient.get(s.clientId) ?? [];
+    arr.push(s);
+    byClient.set(s.clientId, arr);
+  }
+
+  let created = 0;
+  let existing = 0;
+
+  for (const [clientId, clientSchedules] of byClient) {
+    const client = clientSchedules[0]!.client;
+
+    // Upsert fulfillment order for this client+date
+    const existingOrder = await prisma.fulfillmentOrder.findUnique({
+      where: {
+        organizationId_clientId_deliveryDate: {
+          organizationId: org.id,
+          clientId,
+          deliveryDate,
+        },
+      },
+      include: { items: true },
+    });
+
+    if (existingOrder) {
+      // Add any new schedules not already linked
+      const linkedScheduleIds = new Set(existingOrder.items.map((i) => i.mealScheduleId));
+      const newSchedules = clientSchedules.filter((s) => !linkedScheduleIds.has(s.id));
+      if (newSchedules.length > 0) {
+        await prisma.fulfillmentItem.createMany({
+          data: newSchedules.map((s) => ({
+            fulfillmentOrderId: existingOrder.id,
+            mealScheduleId: s.id,
+          })),
+        });
+      }
+      existing++;
+      continue;
+    }
+
+    // Create new fulfillment order with snapshot of client delivery info
+    await prisma.fulfillmentOrder.create({
+      data: {
+        organizationId: org.id,
+        clientId,
+        deliveryDate,
+        status: FulfillmentStatus.PENDING,
+        deliveryAddress: client.deliveryAddress,
+        deliveryNotes: client.deliveryNotes,
+        deliveryZone: client.deliveryZone,
+        createdBy: user.email,
+        items: {
+          create: clientSchedules.map((s) => ({
+            mealScheduleId: s.id,
+          })),
+        },
+      },
+    });
+    created++;
+  }
+
+  return res.json({ created, existing });
+});
+
+/** List fulfillment orders with filters */
+v1Router.get("/fulfillment", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { date, status, clientId } = req.query as {
+    date?: string;
+    status?: string;
+    clientId?: string;
+  };
+
+  // Build typed where clause
+  const dateFilter = date ? (() => {
+    const d = parseDateOnlyUtc(date);
+    return { gte: startOfDay(d), lte: endOfDay(d) };
+  })() : undefined;
+  const statusFilter = status ? (() => {
+    const statuses = status.split(",") as FulfillmentStatus[];
+    return statuses.length === 1 ? statuses[0] : { in: statuses };
+  })() : undefined;
+
+  const orders = await prisma.fulfillmentOrder.findMany({
+    where: {
+      organizationId: org.id,
+      ...(dateFilter ? { deliveryDate: dateFilter } : {}),
+      ...(statusFilter ? { status: statusFilter } : {}),
+      ...(clientId ? { clientId } : {}),
+    },
+    include: {
+      client: { select: { id: true, fullName: true, deliveryZone: true } },
+      items: {
+        include: {
+          mealSchedule: {
+            include: { sku: { select: { id: true, name: true } } },
+          },
+        },
+      },
+      routeStop: {
+        include: { route: { select: { id: true, name: true, status: true } } },
+      },
+    },
+    orderBy: [{ deliveryZone: "asc" }, { client: { fullName: "asc" } }],
+  });
+
+  return res.json(
+    orders.map((o) => ({
+      id: o.id,
+      clientId: o.clientId,
+      clientName: o.client.fullName,
+      deliveryDate: o.deliveryDate.toISOString().slice(0, 10),
+      status: o.status,
+      deliveryAddress: o.deliveryAddress,
+      deliveryNotes: o.deliveryNotes,
+      deliveryZone: o.deliveryZone,
+      itemCount: o.items.length,
+      packedCount: o.items.filter((i) => i.packed).length,
+      packedAt: o.packedAt?.toISOString() ?? null,
+      dispatchedAt: o.dispatchedAt?.toISOString() ?? null,
+      deliveredAt: o.deliveredAt?.toISOString() ?? null,
+      failedAt: o.failedAt?.toISOString() ?? null,
+      failureReason: o.failureReason,
+      route: o.routeStop
+        ? { id: o.routeStop.route.id, name: o.routeStop.route.name, stopOrder: o.routeStop.stopOrder }
+        : null,
+      items: o.items.map((i) => ({
+        id: i.id,
+        mealScheduleId: i.mealScheduleId,
+        skuName: i.mealSchedule.sku?.name ?? "Unknown",
+        mealSlot: i.mealSchedule.mealSlot,
+        packed: i.packed,
+      })),
+    })),
+  );
+});
+
+/** Get single fulfillment order with full detail */
+v1Router.get("/fulfillment/:id", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { id } = req.params;
+
+  const order = await prisma.fulfillmentOrder.findFirst({
+    where: { id, organizationId: org.id },
+    include: {
+      client: { select: { id: true, fullName: true, deliveryZone: true, exclusions: true } },
+      packedBy: { select: { id: true, email: true } },
+      items: {
+        include: {
+          mealSchedule: {
+            include: {
+              sku: {
+                select: {
+                  id: true,
+                  name: true,
+                  servingSizeG: true,
+                },
+              },
+            },
+          },
+        },
+      },
+      routeStop: {
+        include: { route: { select: { id: true, name: true, status: true } } },
+      },
+    },
+  });
+
+  if (!order) {
+    return res.status(404).json({ error: "Fulfillment order not found" });
+  }
+
+  return res.json({
+    id: order.id,
+    clientId: order.clientId,
+    clientName: order.client.fullName,
+    clientExclusions: order.client.exclusions,
+    deliveryDate: order.deliveryDate.toISOString().slice(0, 10),
+    status: order.status,
+    deliveryAddress: order.deliveryAddress,
+    deliveryNotes: order.deliveryNotes,
+    deliveryZone: order.deliveryZone,
+    packedAt: order.packedAt?.toISOString() ?? null,
+    packedBy: order.packedBy?.email ?? null,
+    dispatchedAt: order.dispatchedAt?.toISOString() ?? null,
+    deliveredAt: order.deliveredAt?.toISOString() ?? null,
+    failedAt: order.failedAt?.toISOString() ?? null,
+    failureReason: order.failureReason,
+    route: order.routeStop
+      ? { id: order.routeStop.route.id, name: order.routeStop.route.name, stopOrder: order.routeStop.stopOrder }
+      : null,
+    items: order.items.map((i) => ({
+      id: i.id,
+      mealScheduleId: i.mealScheduleId,
+      skuName: i.mealSchedule.sku?.name ?? "Unknown",
+      mealSlot: i.mealSchedule.mealSlot,
+      servingSizeG: i.mealSchedule.sku?.servingSizeG ?? null,
+      packed: i.packed,
+    })),
+  });
+});
+
+/** Update fulfillment order status */
+v1Router.patch("/fulfillment/:id/status", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const user = await getDefaultUser();
+  const { id } = req.params;
+  const body = validateBody(updateFulfillmentStatusBodySchema, req.body, res);
+  if (!body) return;
+
+  const order = await prisma.fulfillmentOrder.findFirst({
+    where: { id, organizationId: org.id },
+    include: { items: true },
+  });
+  if (!order) {
+    return res.status(404).json({ error: "Fulfillment order not found" });
+  }
+
+  const data: Record<string, unknown> = {
+    status: body.status,
+    version: { increment: 1 },
+  };
+
+  switch (body.status) {
+    case "PACKED":
+      data.packedAt = new Date();
+      data.packedByUserId = user.id;
+      break;
+    case "DISPATCHED":
+      data.dispatchedAt = new Date();
+      break;
+    case "DELIVERED":
+      data.deliveredAt = new Date();
+      break;
+    case "FAILED":
+      data.failedAt = new Date();
+      data.failureReason = body.failureReason ?? null;
+      break;
+  }
+
+  const updated = await prisma.fulfillmentOrder.update({
+    where: { id },
+    data,
+  });
+
+  // When DELIVERED, mark all linked MealSchedules as DONE (triggers label freeze + inventory)
+  const freezeResults: Array<{ mealScheduleId: string; success: boolean; warning?: string }> = [];
+  if (body.status === "DELIVERED") {
+    for (const item of order.items) {
+      try {
+        await freezeLabelFromScheduleDone({
+          mealScheduleId: item.mealScheduleId,
+          servedByUserId: user.id,
+        });
+        freezeResults.push({ mealScheduleId: item.mealScheduleId, success: true });
+      } catch (error) {
+        freezeResults.push({
+          mealScheduleId: item.mealScheduleId,
+          success: false,
+          warning: error instanceof Error ? error.message : "Label freeze failed",
+        });
+      }
+    }
+    // Also update the schedules to DONE
+    await prisma.mealSchedule.updateMany({
+      where: { id: { in: order.items.map((i) => i.mealScheduleId) } },
+      data: { status: "DONE", version: { increment: 1 } },
+    });
+  }
+
+  return res.json({
+    id: updated.id,
+    status: updated.status,
+    packedAt: updated.packedAt?.toISOString() ?? null,
+    dispatchedAt: updated.dispatchedAt?.toISOString() ?? null,
+    deliveredAt: updated.deliveredAt?.toISOString() ?? null,
+    failedAt: updated.failedAt?.toISOString() ?? null,
+    failureReason: updated.failureReason,
+    ...(freezeResults.length > 0 ? { freezeResults } : {}),
+  });
+});
+
+/** Toggle packed status on individual fulfillment item */
+v1Router.patch("/fulfillment/:id/items/:itemId/pack", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { id, itemId } = req.params;
+
+  // Verify order belongs to org
+  const order = await prisma.fulfillmentOrder.findFirst({
+    where: { id, organizationId: org.id },
+  });
+  if (!order) {
+    return res.status(404).json({ error: "Fulfillment order not found" });
+  }
+
+  const item = await prisma.fulfillmentItem.findFirst({
+    where: { id: itemId, fulfillmentOrderId: id },
+  });
+  if (!item) {
+    return res.status(404).json({ error: "Fulfillment item not found" });
+  }
+
+  const updated = await prisma.fulfillmentItem.update({
+    where: { id: itemId },
+    data: { packed: !item.packed },
+  });
+
+  // Auto-transition order to PACKING if still PENDING
+  if (order.status === FulfillmentStatus.PENDING) {
+    await prisma.fulfillmentOrder.update({
+      where: { id },
+      data: { status: FulfillmentStatus.PACKING, version: { increment: 1 } },
+    });
+  }
+
+  return res.json({
+    id: updated.id,
+    mealScheduleId: updated.mealScheduleId,
+    packed: updated.packed,
+  });
+});
+
+// ── Delivery Routes ─────────────────────────────────────────────
+
+/** Create a delivery route */
+v1Router.post("/routes", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const body = validateBody(createRouteBodySchema, req.body, res);
+  if (!body) return;
+
+  const route = await prisma.deliveryRoute.create({
+    data: {
+      organizationId: org.id,
+      routeDate: parseDateOnlyUtc(body.routeDate),
+      name: body.name,
+      driverName: body.driverName ?? null,
+      notes: body.notes ?? null,
+    },
+  });
+
+  return res.status(201).json({
+    id: route.id,
+    routeDate: route.routeDate.toISOString().slice(0, 10),
+    name: route.name,
+    driverName: route.driverName,
+    notes: route.notes,
+    status: route.status,
+  });
+});
+
+/** List delivery routes */
+v1Router.get("/routes", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { date, status } = req.query as { date?: string; status?: string };
+
+  const routeDateFilter = date ? (() => {
+    const d = parseDateOnlyUtc(date);
+    return { gte: startOfDay(d), lte: endOfDay(d) };
+  })() : undefined;
+
+  const routes = await prisma.deliveryRoute.findMany({
+    where: {
+      organizationId: org.id,
+      ...(routeDateFilter ? { routeDate: routeDateFilter } : {}),
+      ...(status ? { status: status as RouteStatus } : {}),
+    },
+    include: {
+      stops: {
+        include: {
+          fulfillmentOrder: {
+            include: {
+              client: { select: { id: true, fullName: true } },
+            },
+          },
+        },
+        orderBy: { stopOrder: "asc" },
+      },
+    },
+    orderBy: { name: "asc" },
+  });
+
+  return res.json(
+    routes.map((r) => ({
+      id: r.id,
+      routeDate: r.routeDate.toISOString().slice(0, 10),
+      name: r.name,
+      driverName: r.driverName,
+      notes: r.notes,
+      status: r.status,
+      dispatchedAt: r.dispatchedAt?.toISOString() ?? null,
+      completedAt: r.completedAt?.toISOString() ?? null,
+      stopCount: r.stops.length,
+      stops: r.stops.map((s) => ({
+        id: s.id,
+        stopOrder: s.stopOrder,
+        fulfillmentOrderId: s.fulfillmentOrderId,
+        clientName: s.fulfillmentOrder.client.fullName,
+        deliveryAddress: s.fulfillmentOrder.deliveryAddress,
+        deliveryZone: s.fulfillmentOrder.deliveryZone,
+        status: s.fulfillmentOrder.status,
+      })),
+    })),
+  );
+});
+
+/** Get single delivery route with stops */
+v1Router.get("/routes/:id", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { id } = req.params;
+
+  const route = await prisma.deliveryRoute.findFirst({
+    where: { id, organizationId: org.id },
+    include: {
+      stops: {
+        include: {
+          fulfillmentOrder: {
+            include: {
+              client: { select: { id: true, fullName: true, exclusions: true } },
+              items: {
+                include: {
+                  mealSchedule: {
+                    include: { sku: { select: { id: true, name: true } } },
+                  },
+                },
+              },
+            },
+          },
+        },
+        orderBy: { stopOrder: "asc" },
+      },
+    },
+  });
+
+  if (!route) {
+    return res.status(404).json({ error: "Route not found" });
+  }
+
+  return res.json({
+    id: route.id,
+    routeDate: route.routeDate.toISOString().slice(0, 10),
+    name: route.name,
+    driverName: route.driverName,
+    notes: route.notes,
+    status: route.status,
+    dispatchedAt: route.dispatchedAt?.toISOString() ?? null,
+    completedAt: route.completedAt?.toISOString() ?? null,
+    stops: route.stops.map((s) => ({
+      id: s.id,
+      stopOrder: s.stopOrder,
+      fulfillmentOrderId: s.fulfillmentOrderId,
+      clientName: s.fulfillmentOrder.client.fullName,
+      deliveryAddress: s.fulfillmentOrder.deliveryAddress,
+      deliveryNotes: s.fulfillmentOrder.deliveryNotes,
+      deliveryZone: s.fulfillmentOrder.deliveryZone,
+      status: s.fulfillmentOrder.status,
+      items: s.fulfillmentOrder.items.map((i) => ({
+        skuName: i.mealSchedule.sku?.name ?? "Unknown",
+        mealSlot: i.mealSchedule.mealSlot,
+        packed: i.packed,
+      })),
+    })),
+  });
+});
+
+/** Update route metadata */
+v1Router.patch("/routes/:id", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { id } = req.params;
+  const body = validateBody(updateRouteBodySchema, req.body, res);
+  if (!body) return;
+
+  const route = await prisma.deliveryRoute.findFirst({
+    where: { id, organizationId: org.id },
+  });
+  if (!route) {
+    return res.status(404).json({ error: "Route not found" });
+  }
+
+  const updated = await prisma.deliveryRoute.update({
+    where: { id },
+    data: {
+      ...(body.name !== undefined ? { name: body.name } : {}),
+      ...(body.driverName !== undefined ? { driverName: body.driverName } : {}),
+      ...(body.notes !== undefined ? { notes: body.notes } : {}),
+    },
+  });
+
+  return res.json({
+    id: updated.id,
+    name: updated.name,
+    driverName: updated.driverName,
+    notes: updated.notes,
+    status: updated.status,
+  });
+});
+
+/** Add stops to a route */
+v1Router.post("/routes/:id/stops", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { id } = req.params;
+  const body = validateBody(addRouteStopsBodySchema, req.body, res);
+  if (!body) return;
+
+  const route = await prisma.deliveryRoute.findFirst({
+    where: { id, organizationId: org.id },
+  });
+  if (!route) {
+    return res.status(404).json({ error: "Route not found" });
+  }
+
+  // Verify all fulfillment orders exist and belong to org
+  const orderIds = body.stops.map((s) => s.fulfillmentOrderId);
+  const orders = await prisma.fulfillmentOrder.findMany({
+    where: { id: { in: orderIds }, organizationId: org.id },
+  });
+  if (orders.length !== orderIds.length) {
+    return res.status(400).json({ error: "One or more fulfillment orders not found" });
+  }
+
+  // Check for orders already assigned to routes
+  const existingStops = await prisma.deliveryRouteStop.findMany({
+    where: { fulfillmentOrderId: { in: orderIds } },
+  });
+  if (existingStops.length > 0) {
+    return res.status(400).json({
+      error: "One or more orders are already assigned to a route",
+      conflicting: existingStops.map((s) => s.fulfillmentOrderId),
+    });
+  }
+
+  const created = await prisma.deliveryRouteStop.createMany({
+    data: body.stops.map((s) => ({
+      routeId: id!,
+      fulfillmentOrderId: s.fulfillmentOrderId,
+      stopOrder: s.stopOrder,
+    })),
+  });
+
+  return res.status(201).json({ added: created.count });
+});
+
+/** Reorder stops within a route */
+v1Router.patch("/routes/:id/stops/reorder", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { id } = req.params;
+  const body = validateBody(reorderRouteStopsBodySchema, req.body, res);
+  if (!body) return;
+
+  const route = await prisma.deliveryRoute.findFirst({
+    where: { id, organizationId: org.id },
+  });
+  if (!route) {
+    return res.status(404).json({ error: "Route not found" });
+  }
+
+  // Update each stop's order
+  const updates = body.stopIds.map((stopId, index) =>
+    prisma.deliveryRouteStop.update({
+      where: { id: stopId },
+      data: { stopOrder: index + 1 },
+    }),
+  );
+  await prisma.$transaction(updates);
+
+  return res.json({ reordered: body.stopIds.length });
+});
+
+/** Remove a stop from a route */
+v1Router.delete("/routes/:id/stops/:stopId", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { id, stopId } = req.params;
+
+  const route = await prisma.deliveryRoute.findFirst({
+    where: { id, organizationId: org.id },
+  });
+  if (!route) {
+    return res.status(404).json({ error: "Route not found" });
+  }
+
+  const stop = await prisma.deliveryRouteStop.findFirst({
+    where: { id: stopId, routeId: id },
+  });
+  if (!stop) {
+    return res.status(404).json({ error: "Stop not found on this route" });
+  }
+
+  await prisma.deliveryRouteStop.delete({ where: { id: stopId } });
+
+  return res.json({ deleted: true });
+});
+
+/** Dispatch a route — sets all fulfillment orders to DISPATCHED */
+v1Router.post("/routes/:id/dispatch", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { id } = req.params;
+
+  const route = await prisma.deliveryRoute.findFirst({
+    where: { id, organizationId: org.id },
+    include: {
+      stops: { include: { fulfillmentOrder: true } },
+    },
+  });
+  if (!route) {
+    return res.status(404).json({ error: "Route not found" });
+  }
+
+  if (route.status !== "PLANNING") {
+    return res.status(400).json({ error: "Route has already been dispatched" });
+  }
+
+  const now = new Date();
+
+  // Update route status
+  await prisma.deliveryRoute.update({
+    where: { id },
+    data: { status: "DISPATCHED", dispatchedAt: now },
+  });
+
+  // Update all fulfillment orders on this route to DISPATCHED
+  const orderIds = route.stops.map((s) => s.fulfillmentOrderId);
+  await prisma.fulfillmentOrder.updateMany({
+    where: { id: { in: orderIds } },
+    data: { status: FulfillmentStatus.DISPATCHED, dispatchedAt: now, version: { increment: 1 } },
+  });
+
+  return res.json({
+    routeId: id,
+    status: "DISPATCHED",
+    dispatchedAt: now.toISOString(),
+    ordersDispatched: orderIds.length,
+  });
+});
+
+// ── Delivery Print Endpoints ────────────────────────────────────
+
+/** Daily delivery manifest — all clients & meals for a date, grouped by zone */
+v1Router.get("/print/delivery-manifest/:date", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { date } = req.params;
+  const deliveryDate = parseDateOnlyUtc(date!);
+  const dayStart = startOfDay(deliveryDate);
+  const dayEnd = endOfDay(deliveryDate);
+
+  const orders = await prisma.fulfillmentOrder.findMany({
+    where: {
+      organizationId: org.id,
+      deliveryDate: { gte: dayStart, lte: dayEnd },
+    },
+    include: {
+      client: { select: { id: true, fullName: true } },
+      items: {
+        include: {
+          mealSchedule: {
+            include: { sku: { select: { name: true, servingSizeG: true } } },
+          },
+        },
+      },
+    },
+    orderBy: [{ deliveryZone: "asc" }, { client: { fullName: "asc" } }],
+  });
+
+  // Group by zone
+  const zones = new Map<string, typeof orders>();
+  for (const o of orders) {
+    const zone = o.deliveryZone ?? "Unassigned";
+    const arr = zones.get(zone) ?? [];
+    arr.push(o);
+    zones.set(zone, arr);
+  }
+
+  return res.json({
+    date: date,
+    totalOrders: orders.length,
+    totalItems: orders.reduce((sum, o) => sum + o.items.length, 0),
+    zones: Array.from(zones.entries()).map(([zone, zoneOrders]) => ({
+      zone,
+      orderCount: zoneOrders.length,
+      orders: zoneOrders.map((o) => ({
+        id: o.id,
+        clientName: o.client.fullName,
+        status: o.status,
+        deliveryAddress: o.deliveryAddress,
+        deliveryNotes: o.deliveryNotes,
+        items: o.items.map((i) => ({
+          skuName: i.mealSchedule.sku?.name ?? "Unknown",
+          mealSlot: i.mealSchedule.mealSlot,
+          servingSizeG: i.mealSchedule.sku?.servingSizeG ?? null,
+          packed: i.packed,
+        })),
+      })),
+    })),
+  });
+});
+
+/** Per-client packing slip */
+v1Router.get("/print/packing-slip/:fulfillmentId", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { fulfillmentId } = req.params;
+
+  const order = await prisma.fulfillmentOrder.findFirst({
+    where: { id: fulfillmentId, organizationId: org.id },
+    include: {
+      client: {
+        select: { id: true, fullName: true, exclusions: true, preferences: true },
+      },
+      items: {
+        include: {
+          mealSchedule: {
+            include: {
+              sku: {
+                select: {
+                  name: true,
+                  servingSizeG: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!order) {
+    return res.status(404).json({ error: "Fulfillment order not found" });
+  }
+
+  return res.json({
+    orderId: order.id,
+    deliveryDate: order.deliveryDate.toISOString().slice(0, 10),
+    client: {
+      name: order.client.fullName,
+      exclusions: order.client.exclusions,
+      preferences: order.client.preferences,
+    },
+    deliveryAddress: order.deliveryAddress,
+    deliveryNotes: order.deliveryNotes,
+    deliveryZone: order.deliveryZone,
+    status: order.status,
+    items: order.items.map((i) => ({
+      id: i.id,
+      skuName: i.mealSchedule.sku?.name ?? "Unknown",
+      mealSlot: i.mealSchedule.mealSlot,
+      servingSizeG: i.mealSchedule.sku?.servingSizeG ?? null,
+      packed: i.packed,
+    })),
+    totalItems: order.items.length,
+    packedItems: order.items.filter((i) => i.packed).length,
+  });
+});
+
+/** Driver's route sheet */
+v1Router.get("/print/route-sheet/:routeId", async (req, res) => {
+  const org = await getPrimaryOrganization();
+  const { routeId } = req.params;
+
+  const route = await prisma.deliveryRoute.findFirst({
+    where: { id: routeId, organizationId: org.id },
+    include: {
+      stops: {
+        include: {
+          fulfillmentOrder: {
+            include: {
+              client: { select: { fullName: true, phone: true } },
+              items: {
+                include: {
+                  mealSchedule: {
+                    include: { sku: { select: { name: true } } },
+                  },
+                },
+              },
+            },
+          },
+        },
+        orderBy: { stopOrder: "asc" },
+      },
+    },
+  });
+
+  if (!route) {
+    return res.status(404).json({ error: "Route not found" });
+  }
+
+  return res.json({
+    routeId: route.id,
+    routeDate: route.routeDate.toISOString().slice(0, 10),
+    routeName: route.name,
+    driverName: route.driverName,
+    notes: route.notes,
+    status: route.status,
+    totalStops: route.stops.length,
+    stops: route.stops.map((s) => ({
+      stopNumber: s.stopOrder,
+      clientName: s.fulfillmentOrder.client.fullName,
+      clientPhone: s.fulfillmentOrder.client.phone,
+      deliveryAddress: s.fulfillmentOrder.deliveryAddress,
+      deliveryNotes: s.fulfillmentOrder.deliveryNotes,
+      deliveryZone: s.fulfillmentOrder.deliveryZone,
+      status: s.fulfillmentOrder.status,
+      itemCount: s.fulfillmentOrder.items.length,
+      items: s.fulfillmentOrder.items.map((i) => ({
+        skuName: i.mealSchedule.sku?.name ?? "Unknown",
+        mealSlot: i.mealSchedule.mealSlot,
+      })),
+    })),
+  });
 });
