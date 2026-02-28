@@ -6611,7 +6611,8 @@ v1Router.get("/skus", requireApiKey, async (_req: express.Request, res: express.
 
 /** GET /v1/openapi.json — OpenAPI spec for ChatGPT Custom GPT Action */
 v1Router.get("/openapi.json", (_req: express.Request, res: express.Response) => {
-  const apiBase = process.env.API_PUBLIC_URL || `${_req.protocol}://${_req.get("host")}`;
+  const proto = _req.get("x-forwarded-proto") || _req.protocol;
+  const apiBase = process.env.API_PUBLIC_URL || `${proto}://${_req.get("host")}`;
   const spec = buildOpenApiSpec(apiBase);
   res.setHeader("Content-Type", "application/json");
   return res.json(spec);
