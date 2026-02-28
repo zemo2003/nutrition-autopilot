@@ -2,8 +2,6 @@
 
 A database-first nutrition operations platform with deterministic label traceability, FDA-compliant rounding, and full audit lineage from ingredient to plate.
 
-Built for private chefs, meal prep companies, and clinical nutrition teams who need **scientifically verified** nutrition labels that survive regulatory scrutiny.
-
 ---
 
 ## What It Does
