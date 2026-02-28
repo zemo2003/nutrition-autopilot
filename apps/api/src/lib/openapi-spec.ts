@@ -1,10 +1,9 @@
 /**
- * OpenAPI 3.0.0 spec for the Numen ChatGPT Action.
- * Uses 3.0.0 for maximum ChatGPT GPT Action compatibility.
+ * OpenAPI 3.1.0 spec for the Numen ChatGPT Action.
  */
 export function buildOpenApiSpec(apiBaseUrl: string) {
   return {
-    openapi: "3.0.0",
+    openapi: "3.1.0",
     info: {
       title: "Numen Meal Planner API",
       description: "Push meal plans from ChatGPT into Numen. Look up clients and menu items, then push a weekly meal plan.",
