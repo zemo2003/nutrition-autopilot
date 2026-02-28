@@ -22,23 +22,7 @@ export function buildOpenApiSpec(apiBaseUrl: string) {
               description: "Client list",
               content: {
                 "application/json": {
-                  schema: {
-                    type: "object",
-                    properties: {
-                      clients: {
-                        type: "array",
-                        items: {
-                          type: "object",
-                          properties: {
-                            id: { type: "string" },
-                            fullName: { type: "string" },
-                            deliveryAddressHome: { type: "string", nullable: true },
-                            deliveryAddressWork: { type: "string", nullable: true },
-                          },
-                        },
-                      },
-                    },
-                  },
+                  schema: { $ref: "#/components/schemas/ClientListResponse" },
                 },
               },
             },
@@ -55,22 +39,7 @@ export function buildOpenApiSpec(apiBaseUrl: string) {
               description: "SKU list",
               content: {
                 "application/json": {
-                  schema: {
-                    type: "object",
-                    properties: {
-                      skus: {
-                        type: "array",
-                        items: {
-                          type: "object",
-                          properties: {
-                            code: { type: "string" },
-                            name: { type: "string" },
-                            servingSizeG: { type: "number", nullable: true },
-                          },
-                        },
-                      },
-                    },
-                  },
+                  schema: { $ref: "#/components/schemas/SkuListResponse" },
                 },
               },
             },
@@ -86,49 +55,7 @@ export function buildOpenApiSpec(apiBaseUrl: string) {
             required: true,
             content: {
               "application/json": {
-                schema: {
-                  type: "object",
-                  required: ["meals"],
-                  properties: {
-                    meals: {
-                      type: "array",
-                      description: "Array of meals to schedule",
-                      items: {
-                        type: "object",
-                        required: ["clientName", "mealName", "serviceDate", "mealSlot"],
-                        properties: {
-                          clientName: {
-                            type: "string",
-                            description: "Client's full name (e.g., 'Alex')",
-                          },
-                          mealName: {
-                            type: "string",
-                            description: "Name of the meal/dish (e.g., 'Grilled Chicken & Rice'). Matched against existing SKUs or auto-created.",
-                          },
-                          serviceDate: {
-                            type: "string",
-                            format: "date",
-                            description: "Date the meal is served (YYYY-MM-DD)",
-                          },
-                          mealSlot: {
-                            type: "string",
-                            enum: ["breakfast", "lunch", "dinner", "snack", "pre_training", "post_training", "pre_bed"],
-                            description: "Time-of-day slot for the meal",
-                          },
-                          servings: {
-                            type: "number",
-                            description: "Number of servings (default: 1)",
-                            default: 1,
-                          },
-                          notes: {
-                            type: "string",
-                            description: "Optional notes (e.g., 'extra veggies', 'no sauce')",
-                          },
-                        },
-                      },
-                    },
-                  },
-                },
+                schema: { $ref: "#/components/schemas/MealPlanPushRequest" },
               },
             },
           },
@@ -137,29 +64,7 @@ export function buildOpenApiSpec(apiBaseUrl: string) {
               description: "Push result",
               content: {
                 "application/json": {
-                  schema: {
-                    type: "object",
-                    properties: {
-                      created: { type: "integer", description: "Number of new meal schedules created" },
-                      skipped: { type: "integer", description: "Number of duplicate meals skipped" },
-                      skusCreated: {
-                        type: "array",
-                        items: { type: "string" },
-                        description: "Names of auto-created placeholder SKUs",
-                      },
-                      errors: {
-                        type: "array",
-                        items: {
-                          type: "object",
-                          properties: {
-                            meal: { type: "string" },
-                            error: { type: "string" },
-                          },
-                        },
-                        description: "Any errors encountered",
-                      },
-                    },
-                  },
+                  schema: { $ref: "#/components/schemas/MealPlanPushResponse" },
                 },
               },
             },
@@ -168,6 +73,101 @@ export function buildOpenApiSpec(apiBaseUrl: string) {
       },
     },
     components: {
+      schemas: {
+        ClientListResponse: {
+          type: "object",
+          properties: {
+            clients: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  fullName: { type: "string" },
+                  deliveryAddressHome: { type: "string", nullable: true },
+                  deliveryAddressWork: { type: "string", nullable: true },
+                },
+              },
+            },
+          },
+        },
+        SkuListResponse: {
+          type: "object",
+          properties: {
+            skus: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  code: { type: "string" },
+                  name: { type: "string" },
+                  servingSizeG: { type: "number", nullable: true },
+                },
+              },
+            },
+          },
+        },
+        MealPlanPushRequest: {
+          type: "object",
+          required: ["meals"],
+          properties: {
+            meals: {
+              type: "array",
+              description: "Array of meals to schedule",
+              items: {
+                type: "object",
+                required: ["clientName", "mealName", "serviceDate", "mealSlot"],
+                properties: {
+                  clientName: {
+                    type: "string",
+                    description: "Client's full name (e.g., 'Alex')",
+                  },
+                  mealName: {
+                    type: "string",
+                    description: "Name of the meal/dish (e.g., 'Grilled Chicken & Rice'). Matched against existing SKUs or auto-created.",
+                  },
+                  serviceDate: {
+                    type: "string",
+                    format: "date",
+                    description: "Date the meal is served (YYYY-MM-DD)",
+                  },
+                  mealSlot: {
+                    type: "string",
+                    enum: ["breakfast", "lunch", "dinner", "snack", "pre_training", "post_training", "pre_bed"],
+                    description: "Time-of-day slot for the meal",
+                  },
+                  servings: {
+                    type: "number",
+                    description: "Number of servings (default: 1)",
+                    default: 1,
+                  },
+                  notes: {
+                    type: "string",
+                    description: "Optional notes (e.g., 'extra veggies', 'no sauce')",
+                  },
+                },
+              },
+            },
+          },
+        },
+        MealPlanPushResponse: {
+          type: "object",
+          properties: {
+            created: { type: "integer", description: "Number of new meal schedules created" },
+            skipped: { type: "integer", description: "Number of duplicate meals skipped" },
+            skusCreated: {
+              type: "array",
+              items: { type: "string" },
+              description: "Names of auto-created placeholder SKUs",
+            },
+            errors: {
+              type: "array",
+              items: { type: "string" },
+              description: "Any errors encountered",
+            },
+          },
+        },
+      },
       securitySchemes: {
         BearerAuth: {
           type: "http",
