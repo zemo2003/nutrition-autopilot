@@ -144,13 +144,52 @@ The nutrition engine is a pure, deterministic math library with zero database de
 - **USDA Enrichment** &mdash; Async nutrient enrichment from FoodData Central API
 - **Pilot Backfill** &mdash; Historical week import for onboarding
 
-### Client Health Tracking
-- Biometric snapshots (weight, body fat %, lean mass, resting HR)
-- Trend detection (up/down/stable with 1% threshold)
-- Time-series metrics (CGM, bloodwork, custom)
-- Weekly nutrition aggregation (7d, 30d, 60d, 90d rolling averages)
-- Document management (DEXA scans, bloodwork PDFs)
+### Client Profile (Cross-Mode)
+
+The client profile is the central hub that follows across all three modes. Every meal scheduled, every label frozen, every delivery routed ties back to a client record.
+
+**Identity & Preferences**
+- Full name, email, phone, date of birth, sex
+- Dietary goals (free text), food preferences, allergen exclusions (array)
+- Timezone-aware scheduling
+
+**Body Composition & Targets**
+- Height, weight, activity level
+- Target macros: daily kcal, protein (g), carbs (g), fat (g)
+- Target body composition: goal weight (kg), goal body fat %
+- Body composition snapshot history (JSON timeline)
+
+**Biometrics Tracking**
+- Time-series snapshots: weight, body fat %, lean mass, resting HR
+- Automatic trend detection (up/down/stable with 1% threshold)
+- Stale data alerts (>30 days since last entry)
+- Irregular interval detection (3x median gap)
+
+**Health Metrics**
+- Custom metric series (CGM glucose, bloodwork panels, sleep, HRV, etc.)
+- Verified/unverified status per metric entry
+- Rolling period aggregation (7d, 30d, 60d, 90d)
+
+**Documents**
+- DEXA scans, bloodwork PDFs, clinical notes
+- Document type classification and verification status
+- Attached to client timeline
+
+**Nutrition Analytics**
+- Weekly nutrition summaries with macro breakdown
+- Compliance tracking (days with data / period)
+- Trend analysis (first half vs. second half comparison)
 - Printable progress reports
+
+**Delivery**
+- Dual addresses (home + work) with delivery notes
+- Delivery zone assignment
+- Address carried into fulfillment orders as snapshot
+
+**How it connects across modes:**
+- **Kitchen** &mdash; Client name on every meal card, allergen exclusions checked against compositions, batch portions tagged to client
+- **Science** &mdash; Client health dashboard with biometrics, metrics, documents, and TDEE calculations using their profile data (Mifflin-St Jeor with their height/weight/age/sex/activity level)
+- **Delivery** &mdash; Client addresses drive route planning, delivery notes shown on packing slips and route sheets
 
 ### Kitchen Operations
 - Batch production with 10 checkpoint types
