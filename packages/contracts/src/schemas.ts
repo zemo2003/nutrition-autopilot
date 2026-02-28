@@ -332,6 +332,28 @@ export const updateBatchPortionBodySchema = z.object({
 });
 
 // ============================================================================
+// CHATGPT MEAL PLAN PUSH
+// ============================================================================
+
+const mealSlotEnum = z.enum([
+  "breakfast", "lunch", "dinner", "snack",
+  "pre_training", "post_training", "pre_bed",
+  "BREAKFAST", "LUNCH", "DINNER", "SNACK",
+  "PRE_TRAINING", "POST_TRAINING", "PRE_BED",
+]);
+
+export const mealPlanPushBodySchema = z.object({
+  meals: z.array(z.object({
+    clientName: z.string().min(1),
+    mealName: z.string().min(1),
+    serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    mealSlot: mealSlotEnum,
+    servings: z.number().positive().optional().default(1),
+    notes: z.string().optional(),
+  })).min(1).max(200),
+});
+
+// ============================================================================
 // DTO TYPES
 // ============================================================================
 

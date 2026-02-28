@@ -40,6 +40,15 @@ export default function UploadPage() {
           modeLabel="Commit"
           acceptTypes=".xlsx,.xls,.csv"
         />
+
+        <div className="card" style={{ textAlign: "center", padding: "var(--sp-5)" }}>
+          <p style={{ color: "var(--fg-muted)", marginBottom: "var(--sp-3)" }}>
+            Or auto-import Instacart orders from your Gmail
+          </p>
+          <Link href={"/gmail" as any} className="btn btn-outline">
+            Set up Gmail Auto-Import
+          </Link>
+        </div>
       </div>
     </div>
   );

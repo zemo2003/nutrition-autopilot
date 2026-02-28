@@ -41,7 +41,10 @@ import {
   updateRouteBodySchema,
   addRouteStopsBodySchema,
   reorderRouteStopsBodySchema,
+  mealPlanPushBodySchema,
 } from "@nutrition/contracts";
+import { requireApiKey } from "../lib/auth.js";
+import { buildOpenApiSpec } from "../lib/openapi-spec.js";
 import { z } from "zod";
 
 const upload = multer({ dest: "/tmp" });
@@ -2839,7 +2842,8 @@ v1Router.patch("/clients/:clientId", async (req, res) => {
     targetFatG: updated.targetFatG,
     targetWeightKg: updated.targetWeightKg,
     targetBodyFatPct: updated.targetBodyFatPct,
-    deliveryAddress: updated.deliveryAddress,
+    deliveryAddressHome: updated.deliveryAddressHome,
+    deliveryAddressWork: updated.deliveryAddressWork,
     deliveryNotes: updated.deliveryNotes,
     deliveryZone: updated.deliveryZone,
   });
@@ -6590,4 +6594,315 @@ v1Router.get("/print/route-sheet/:routeId", async (req, res) => {
       })),
     })),
   });
+});
+
+// ─── GPT Action Endpoints ────────────────────────────────────
+
+/** GET /v1/skus — list active SKUs for GPT meal planning */
+v1Router.get("/skus", requireApiKey, async (_req: express.Request, res: express.Response) => {
+  const org = await getPrimaryOrganization();
+  const skus = await prisma.sku.findMany({
+    where: { organizationId: org.id, active: true },
+    orderBy: { name: "asc" },
+    select: { id: true, code: true, name: true, servingSizeG: true },
+  });
+  return res.json({ skus });
+});
+
+/** GET /v1/openapi.json — OpenAPI spec for ChatGPT Custom GPT Action */
+v1Router.get("/openapi.json", (_req: express.Request, res: express.Response) => {
+  const apiBase = process.env.API_PUBLIC_URL || `${_req.protocol}://${_req.get("host")}`;
+  const spec = buildOpenApiSpec(apiBase);
+  res.setHeader("Content-Type", "application/json");
+  return res.json(spec);
+});
+
+/** POST /v1/meal-plans/push — bulk push meal plan from ChatGPT GPT Action */
+v1Router.post("/meal-plans/push", requireApiKey, async (req: express.Request, res: express.Response) => {
+  const parsed = mealPlanPushBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Validation failed", details: parsed.error.flatten() });
+  }
+
+  const org = await getPrimaryOrganization();
+  const { meals } = parsed.data;
+
+  // Pre-load clients and SKUs for resolution
+  const clients = await prisma.client.findMany({
+    where: { organizationId: org.id },
+    select: { id: true, fullName: true },
+  });
+
+  const existingSkus = await prisma.sku.findMany({
+    where: { organizationId: org.id, active: true },
+    select: { id: true, code: true, name: true },
+  });
+
+  const results = { created: 0, skipped: 0, skusCreated: [] as string[], errors: [] as string[] };
+
+  for (const meal of meals) {
+    // 1. Resolve client by name (case-insensitive)
+    const clientMatches = clients.filter(
+      (c) => c.fullName.toLowerCase() === meal.clientName.toLowerCase()
+    );
+    if (clientMatches.length === 0) {
+      // Try partial match
+      const partial = clients.filter(
+        (c) => c.fullName.toLowerCase().includes(meal.clientName.toLowerCase())
+      );
+      if (partial.length === 1) {
+        clientMatches.push(partial[0]!);
+      } else {
+        results.errors.push(
+          `Client "${meal.clientName}" not found${partial.length > 1 ? ` (${partial.length} partial matches — be more specific)` : ""}`
+        );
+        continue;
+      }
+    }
+    if (clientMatches.length > 1) {
+      results.errors.push(`Client "${meal.clientName}" matched ${clientMatches.length} records — be more specific`);
+      continue;
+    }
+    const client = clientMatches[0]!;
+
+    // 2. Resolve SKU by name (case-insensitive exact, then fuzzy, then auto-create)
+    let sku = existingSkus.find(
+      (s) => s.name.toLowerCase() === meal.mealName.toLowerCase() || s.code.toLowerCase() === meal.mealName.toLowerCase()
+    );
+
+    if (!sku) {
+      // Fuzzy: check if mealName is contained in sku name or vice versa
+      const fuzzy = existingSkus.filter(
+        (s) =>
+          s.name.toLowerCase().includes(meal.mealName.toLowerCase()) ||
+          meal.mealName.toLowerCase().includes(s.name.toLowerCase())
+      );
+      if (fuzzy.length === 1) {
+        sku = fuzzy[0];
+      }
+    }
+
+    if (!sku) {
+      // Auto-create placeholder SKU
+      const code = meal.mealName
+        .toUpperCase()
+        .replace(/[^A-Z0-9]+/g, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 30);
+
+      const newSku = await prisma.sku.create({
+        data: {
+          organizationId: org.id,
+          code: code || `SKU-${Date.now()}`,
+          name: meal.mealName,
+          servingSizeG: 0,
+          active: true,
+        },
+        select: { id: true, code: true, name: true },
+      });
+      existingSkus.push(newSku);
+      sku = newSku;
+      results.skusCreated.push(meal.mealName);
+    }
+
+    // 3. Normalize meal slot to uppercase
+    const mealSlot = meal.mealSlot.toUpperCase() as
+      | "BREAKFAST"
+      | "LUNCH"
+      | "DINNER"
+      | "SNACK"
+      | "PRE_TRAINING"
+      | "POST_TRAINING"
+      | "PRE_BED";
+
+    // 4. Parse service date
+    const serviceDate = new Date(meal.serviceDate + "T00:00:00Z");
+
+    // 5. Dedup check — same client + date + slot + sku
+    const existing = await prisma.mealSchedule.findFirst({
+      where: {
+        clientId: client.id,
+        serviceDate,
+        mealSlot,
+        skuId: sku.id,
+      },
+    });
+
+    if (existing) {
+      results.skipped++;
+      continue;
+    }
+
+    // 6. Create MealSchedule
+    await prisma.mealSchedule.create({
+      data: {
+        organizationId: org.id,
+        clientId: client.id,
+        skuId: sku.id,
+        serviceDate,
+        mealSlot,
+        plannedServings: meal.servings ?? 1,
+        status: "PLANNED",
+        notes: meal.notes ?? null,
+      },
+    });
+
+    results.created++;
+  }
+
+  return res.json(results);
+});
+
+// ─── Gmail Integration Endpoints ─────────────────────────────
+
+/** GET /v1/gmail/auth-url — returns Google OAuth consent URL */
+v1Router.get("/gmail/auth-url", async (_req: express.Request, res: express.Response) => {
+  try {
+    const { getAuthUrl } = await import("../lib/gmail-client.js");
+    const url = getAuthUrl();
+    return res.json({ url });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/** GET /v1/gmail/callback — OAuth redirect handler */
+v1Router.get("/gmail/callback", async (req: express.Request, res: express.Response) => {
+  const code = req.query.code as string;
+  if (!code) {
+    return res.status(400).json({ error: "Missing authorization code" });
+  }
+
+  try {
+    const { exchangeCode } = await import("../lib/gmail-client.js");
+    const tokens = await exchangeCode(code);
+
+    if (!tokens.refresh_token) {
+      return res.status(400).json({ error: "No refresh token received. Please revoke access and try again." });
+    }
+
+    const org = await getPrimaryOrganization();
+
+    // Decode the ID token or use a default email label
+    // Google tokens include an email in the id_token
+    let email = "unknown@gmail.com";
+    if (tokens.id_token) {
+      try {
+        const payload = JSON.parse(
+          Buffer.from(tokens.id_token.split(".")[1]!, "base64url").toString()
+        );
+        if (payload.email) email = payload.email;
+      } catch {
+        // ignore decode errors
+      }
+    }
+
+    // Upsert the Gmail integration
+    await prisma.gmailIntegration.upsert({
+      where: {
+        organizationId_email: { organizationId: org.id, email },
+      },
+      update: {
+        refreshToken: tokens.refresh_token,
+        accessToken: tokens.access_token ?? null,
+        tokenExpiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+        active: true,
+        syncError: null,
+        version: { increment: 1 },
+      },
+      create: {
+        organizationId: org.id,
+        email,
+        refreshToken: tokens.refresh_token,
+        accessToken: tokens.access_token ?? null,
+        tokenExpiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+      },
+    });
+
+    // Redirect to the web app Gmail settings page
+    const webBase = process.env.WEB_PUBLIC_URL || "http://localhost:3000";
+    return res.redirect(`${webBase}/gmail?connected=true`);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/** GET /v1/gmail/status — returns connection status + sync history */
+v1Router.get("/gmail/status", async (_req: express.Request, res: express.Response) => {
+  const org = await getPrimaryOrganization();
+
+  const integration = await prisma.gmailIntegration.findFirst({
+    where: { organizationId: org.id, active: true },
+    include: {
+      syncHistory: {
+        orderBy: { syncedAt: "desc" },
+        take: 10,
+      },
+    },
+  });
+
+  if (!integration) {
+    return res.json({ connected: false });
+  }
+
+  return res.json({
+    connected: true,
+    email: integration.email,
+    lastSyncAt: integration.lastSyncAt,
+    syncStatus: integration.syncStatus,
+    syncError: integration.syncError,
+    history: integration.syncHistory.map((h) => ({
+      id: h.id,
+      syncedAt: h.syncedAt,
+      emailsScanned: h.emailsScanned,
+      ordersImported: h.ordersImported,
+      ordersSkipped: h.ordersSkipped,
+      errors: h.errors,
+    })),
+  });
+});
+
+/** POST /v1/gmail/disconnect — deactivate Gmail integration */
+v1Router.post("/gmail/disconnect", async (_req: express.Request, res: express.Response) => {
+  const org = await getPrimaryOrganization();
+
+  const integration = await prisma.gmailIntegration.findFirst({
+    where: { organizationId: org.id, active: true },
+  });
+
+  if (!integration) {
+    return res.status(404).json({ error: "No active Gmail integration found" });
+  }
+
+  await prisma.gmailIntegration.update({
+    where: { id: integration.id },
+    data: { active: false, version: { increment: 1 } },
+  });
+
+  return res.json({ ok: true });
+});
+
+/** POST /v1/gmail/sync — trigger manual Gmail sync */
+v1Router.post("/gmail/sync", async (_req: express.Request, res: express.Response) => {
+  const org = await getPrimaryOrganization();
+
+  const integration = await prisma.gmailIntegration.findFirst({
+    where: { organizationId: org.id, active: true },
+  });
+
+  if (!integration) {
+    return res.status(404).json({ error: "No active Gmail integration found" });
+  }
+
+  if (integration.syncStatus === "SYNCING") {
+    return res.status(409).json({ error: "Sync already in progress" });
+  }
+
+  // Run sync asynchronously
+  const { syncGmailOrders } = await import("../lib/gmail-sync.js");
+  syncGmailOrders(integration.id).catch((err) => {
+    console.error("[gmail-sync] Manual sync error:", err);
+  });
+
+  return res.json({ ok: true, message: "Sync started" });
 });

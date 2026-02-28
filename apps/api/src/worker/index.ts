@@ -71,6 +71,35 @@ async function runConsistencySweep() {
   }
 }
 
+async function runGmailSyncSweep() {
+  // Find active Gmail integrations not synced in the last hour
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+
+  const integrations = await prisma.gmailIntegration.findMany({
+    where: {
+      active: true,
+      syncStatus: { not: "SYNCING" },
+      OR: [
+        { lastSyncAt: null },
+        { lastSyncAt: { lt: oneHourAgo } },
+      ],
+    },
+  });
+
+  for (const integration of integrations) {
+    try {
+      // Dynamic import to avoid loading googleapis when Google creds aren't configured
+      const { syncGmailOrders } = await import("../lib/gmail-sync.js");
+      const result = await syncGmailOrders(integration.id);
+      console.log(
+        `[gmail-sync] ${integration.email}: ${result.ordersImported} imported, ${result.ordersSkipped} skipped, ${result.emailsScanned} scanned`
+      );
+    } catch (err) {
+      console.error(`[gmail-sync] Error syncing ${integration.email}:`, err);
+    }
+  }
+}
+
 async function main() {
   console.log("worker started");
   await runNutrientAutofillSweep();
@@ -79,6 +108,10 @@ async function main() {
     try {
       await runNutrientAutofillSweep();
       await runConsistencySweep();
+      // Only run Gmail sync if Google OAuth is configured
+      if (process.env.GOOGLE_CLIENT_ID) {
+        await runGmailSyncSweep();
+      }
       console.log("worker sweep complete", new Date().toISOString());
     } catch (error) {
       console.error("worker sweep failed", error);

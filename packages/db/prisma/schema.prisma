@@ -258,6 +258,7 @@ model Organization {
   metricSeries          MetricSeries[]
   fulfillmentOrders     FulfillmentOrder[]
   deliveryRoutes        DeliveryRoute[]
+  gmailIntegrations     GmailIntegration[]
 }
 
 model User {
@@ -1369,4 +1370,48 @@ model BatchPortion {
   client          Client?         @relation(fields: [clientId], references: [id])
 
   @@index([batchProductionId])
+}
+
+// ─── Gmail Integration ──────────────────────────────────────
+
+enum GmailSyncStatus {
+  IDLE
+  SYNCING
+  FAILED
+}
+
+model GmailIntegration {
+  id              String          @id @default(cuid())
+  organizationId  String
+  email           String
+  refreshToken    String
+  accessToken     String?
+  tokenExpiresAt  DateTime?
+  lastSyncAt      DateTime?
+  syncStatus      GmailSyncStatus @default(IDLE)
+  syncError       String?
+  active          Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  version         Int             @default(1)
+
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  syncHistory     GmailSyncLog[]
+
+  @@unique([organizationId, email])
+}
+
+model GmailSyncLog {
+  id                 String   @id @default(cuid())
+  gmailIntegrationId String
+  syncedAt           DateTime @default(now())
+  emailsScanned      Int      @default(0)
+  ordersImported     Int      @default(0)
+  ordersSkipped      Int      @default(0)
+  errors             Json?
+  createdAt          DateTime @default(now())
+
+  gmailIntegration   GmailIntegration @relation(fields: [gmailIntegrationId], references: [id], onDelete: Cascade)
+
+  @@index([gmailIntegrationId, syncedAt])
 }
