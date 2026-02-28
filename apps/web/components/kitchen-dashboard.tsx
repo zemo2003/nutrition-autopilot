@@ -565,7 +565,7 @@ export function KitchenDashboard({ counts, clients, sauceCount }: Props) {
       <section className="section">
         <h2 className="section-title">At a Glance</h2>
         <div className="kpi-grid">
-          <Link href={"/prep-plan" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
+          <Link href={"/schedule" as any} className="kpi" style={{ textDecoration: "none", cursor: "pointer" }}>
             <div className="kpi-value">{counts.schedules}</div>
             <div className="kpi-label">Upcoming Meals</div>
           </Link>
