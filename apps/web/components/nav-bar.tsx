@@ -71,7 +71,7 @@ function TabIcon({ name }: { name: IconName }) {
 
 export function NavBar() {
   const pathname = usePathname();
-  const { mode, isLoaded, setMode } = useMode();
+  const { mode, isLoaded, setMode, clearMode } = useMode();
   const [health, setHealth] = useState<HealthStatus>("offline");
 
   useEffect(() => {
@@ -109,9 +109,13 @@ export function NavBar() {
     <>
       <nav className="topnav">
         <div className="topnav-inner">
-          <Link href="/" className="topnav-brand">
+          <button
+            className="topnav-brand"
+            onClick={() => clearMode()}
+            style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}
+          >
             <span>Numen</span>
-          </Link>
+          </button>
 
           {/* Mode pill */}
           <div className="mode-pill">

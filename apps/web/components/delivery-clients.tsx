@@ -19,7 +19,8 @@ type Client = {
   fullName: string;
   email: string | null;
   phone: string | null;
-  deliveryAddress: string | null;
+  deliveryAddressHome: string | null;
+  deliveryAddressWork: string | null;
   deliveryNotes: string | null;
   deliveryZone: string | null;
 };
@@ -36,10 +37,11 @@ export function DeliveryClients() {
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValues, setEditValues] = useState<{
-    deliveryAddress: string;
+    deliveryAddressHome: string;
+    deliveryAddressWork: string;
     deliveryNotes: string;
     deliveryZone: string;
-  }>({ deliveryAddress: "", deliveryNotes: "", deliveryZone: "" });
+  }>({ deliveryAddressHome: "", deliveryAddressWork: "", deliveryNotes: "", deliveryZone: "" });
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [history, setHistory] = useState<DeliveryHistory[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -66,7 +68,8 @@ export function DeliveryClients() {
   const startEditing = (client: Client) => {
     setEditingId(client.id);
     setEditValues({
-      deliveryAddress: client.deliveryAddress ?? "",
+      deliveryAddressHome: client.deliveryAddressHome ?? "",
+      deliveryAddressWork: client.deliveryAddressWork ?? "",
       deliveryNotes: client.deliveryNotes ?? "",
       deliveryZone: client.deliveryZone ?? "",
     });
@@ -78,7 +81,8 @@ export function DeliveryClients() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          deliveryAddress: editValues.deliveryAddress || null,
+          deliveryAddressHome: editValues.deliveryAddressHome || null,
+          deliveryAddressWork: editValues.deliveryAddressWork || null,
           deliveryNotes: editValues.deliveryNotes || null,
           deliveryZone: editValues.deliveryZone || null,
         }),
@@ -126,7 +130,7 @@ export function DeliveryClients() {
     ? clients.filter((c) => c.deliveryZone === zoneFilter)
     : clients;
 
-  const missingAddress = clients.filter((c) => !c.deliveryAddress);
+  const missingBoth = clients.filter((c) => !c.deliveryAddressHome && !c.deliveryAddressWork);
 
   return (
     <div className="page-shell">
@@ -151,10 +155,10 @@ export function DeliveryClients() {
         )}
       </div>
 
-      {missingAddress.length > 0 && (
+      {missingBoth.length > 0 && (
         <div className="alert alert-warning" style={{ marginBottom: "1rem" }}>
-          <strong>{missingAddress.length} client{missingAddress.length > 1 ? "s" : ""}</strong> missing delivery address:{" "}
-          {missingAddress.map((c) => c.fullName).join(", ")}
+          <strong>{missingBoth.length} client{missingBoth.length > 1 ? "s" : ""}</strong> missing both delivery addresses:{" "}
+          {missingBoth.map((c) => c.fullName).join(", ")}
         </div>
       )}
 
@@ -168,7 +172,8 @@ export function DeliveryClients() {
             <thead>
               <tr>
                 <th>Client</th>
-                <th>Address</th>
+                <th>Home Address</th>
+                <th>Work Address</th>
                 <th>Zone</th>
                 <th>Notes</th>
                 <th style={{ width: "120px" }}>Actions</th>
@@ -188,16 +193,33 @@ export function DeliveryClients() {
                       {editingId === client.id ? (
                         <input
                           className="form-input"
-                          value={editValues.deliveryAddress}
+                          value={editValues.deliveryAddressHome}
                           onChange={(e) =>
-                            setEditValues({ ...editValues, deliveryAddress: e.target.value })
+                            setEditValues({ ...editValues, deliveryAddressHome: e.target.value })
                           }
-                          placeholder="Full delivery address"
+                          placeholder="Home address"
                           style={{ width: "100%" }}
                         />
                       ) : (
-                        <span style={{ color: client.deliveryAddress ? "inherit" : "var(--c-ink-muted)" }}>
-                          {client.deliveryAddress || "Not set"}
+                        <span style={{ color: client.deliveryAddressHome ? "inherit" : "var(--c-ink-muted)" }}>
+                          {client.deliveryAddressHome || "Not set"}
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      {editingId === client.id ? (
+                        <input
+                          className="form-input"
+                          value={editValues.deliveryAddressWork}
+                          onChange={(e) =>
+                            setEditValues({ ...editValues, deliveryAddressWork: e.target.value })
+                          }
+                          placeholder="Work address"
+                          style={{ width: "100%" }}
+                        />
+                      ) : (
+                        <span style={{ color: client.deliveryAddressWork ? "inherit" : "var(--c-ink-muted)" }}>
+                          {client.deliveryAddressWork || "Not set"}
                         </span>
                       )}
                     </td>
@@ -262,7 +284,7 @@ export function DeliveryClients() {
                   </tr>
                   {expandedId === client.id && (
                     <tr key={`${client.id}-history`}>
-                      <td colSpan={5} style={{ background: "var(--c-surface-alt)", padding: "0.75rem" }}>
+                      <td colSpan={6} style={{ background: "var(--c-surface-alt)", padding: "0.75rem" }}>
                         <strong style={{ fontSize: "0.85rem" }}>Recent Deliveries</strong>
                         {historyLoading ? (
                           <div style={{ padding: "0.5rem", color: "var(--c-ink-muted)" }}>Loading...</div>

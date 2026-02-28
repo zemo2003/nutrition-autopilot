@@ -337,7 +337,8 @@ model Client {
   targetBodyFatPct         Float?
   bodyCompositionSnapshots Json?
   fileRecords              Json?
-  deliveryAddress          String?
+  deliveryAddressHome      String?
+  deliveryAddressWork      String?
   deliveryNotes            String?
   deliveryZone             String?
   createdAt                DateTime @default(now())

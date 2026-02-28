@@ -220,7 +220,8 @@ v1Router.get("/clients", async (_req, res) => {
       email: c.email ?? null,
       phone: c.phone ?? null,
       externalRef: c.externalRef ?? null,
-      deliveryAddress: c.deliveryAddress ?? null,
+      deliveryAddressHome: c.deliveryAddressHome ?? null,
+      deliveryAddressWork: c.deliveryAddressWork ?? null,
       deliveryNotes: c.deliveryNotes ?? null,
       deliveryZone: c.deliveryZone ?? null,
     }))
@@ -2782,7 +2783,7 @@ v1Router.patch("/clients/:clientId", async (req, res) => {
     email, phone, heightCm, weightKg, goals, preferences, exclusions,
     dateOfBirth, sex, activityLevel,
     targetKcal, targetProteinG, targetCarbG, targetFatG, targetWeightKg, targetBodyFatPct,
-    deliveryAddress, deliveryNotes, deliveryZone,
+    deliveryAddressHome, deliveryAddressWork, deliveryNotes, deliveryZone,
   } = req.body as Record<string, unknown>;
 
   const client = await prisma.client.findFirst({
@@ -2809,7 +2810,8 @@ v1Router.patch("/clients/:clientId", async (req, res) => {
   if (targetFatG !== undefined) data.targetFatG = targetFatG;
   if (targetWeightKg !== undefined) data.targetWeightKg = targetWeightKg;
   if (targetBodyFatPct !== undefined) data.targetBodyFatPct = targetBodyFatPct;
-  if (deliveryAddress !== undefined) data.deliveryAddress = deliveryAddress;
+  if (deliveryAddressHome !== undefined) data.deliveryAddressHome = deliveryAddressHome;
+  if (deliveryAddressWork !== undefined) data.deliveryAddressWork = deliveryAddressWork;
   if (deliveryNotes !== undefined) data.deliveryNotes = deliveryNotes;
   if (deliveryZone !== undefined) data.deliveryZone = deliveryZone;
 
@@ -5830,7 +5832,7 @@ v1Router.post("/fulfillment/generate", async (req, res) => {
         clientId,
         deliveryDate,
         status: FulfillmentStatus.PENDING,
-        deliveryAddress: client.deliveryAddress,
+        deliveryAddress: client.deliveryAddressHome ?? client.deliveryAddressWork,
         deliveryNotes: client.deliveryNotes,
         deliveryZone: client.deliveryZone,
         createdBy: user.email,
