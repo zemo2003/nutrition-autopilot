@@ -1,10 +1,10 @@
 /**
- * OpenAPI 3.1 spec for the Numen ChatGPT Action.
- * Describes the endpoints a Custom GPT needs to push meal plans.
+ * OpenAPI 3.0.0 spec for the Numen ChatGPT Action.
+ * Uses 3.0.0 for maximum ChatGPT GPT Action compatibility.
  */
 export function buildOpenApiSpec(apiBaseUrl: string) {
   return {
-    openapi: "3.1.0",
+    openapi: "3.0.0",
     info: {
       title: "Numen Meal Planner API",
       description: "Push meal plans from ChatGPT into Numen. Look up clients and menu items, then push a weekly meal plan.",
@@ -33,7 +33,7 @@ export function buildOpenApiSpec(apiBaseUrl: string) {
         get: {
           operationId: "listMenuItems",
           summary: "List available menu items (SKUs)",
-          description: "Returns all active menu items (SKUs) with their codes and names. Use the name or code when pushing meal plans.",
+          description: "Returns all active menu items (SKUs) with their codes and names.",
           responses: {
             "200": {
               description: "SKU list",
@@ -50,7 +50,7 @@ export function buildOpenApiSpec(apiBaseUrl: string) {
         post: {
           operationId: "pushMealPlan",
           summary: "Push a meal plan",
-          description: "Create meal schedules for one or more days. If a meal name doesn't match an existing menu item, a placeholder SKU is auto-created. Duplicate schedules (same client + date + slot + meal) are skipped.",
+          description: "Create meal schedules for one or more days. Unmatched meal names auto-create placeholder SKUs. Duplicates are skipped.",
           requestBody: {
             required: true,
             content: {
@@ -75,107 +75,85 @@ export function buildOpenApiSpec(apiBaseUrl: string) {
     components: {
       schemas: {
         ClientListResponse: {
-          type: "object",
+          type: "object" as const,
           properties: {
             clients: {
-              type: "array",
+              type: "array" as const,
               items: {
-                type: "object",
+                type: "object" as const,
                 properties: {
-                  id: { type: "string" },
-                  fullName: { type: "string" },
-                  deliveryAddressHome: { type: "string", nullable: true },
-                  deliveryAddressWork: { type: "string", nullable: true },
+                  id: { type: "string" as const },
+                  fullName: { type: "string" as const },
                 },
               },
             },
           },
         },
         SkuListResponse: {
-          type: "object",
+          type: "object" as const,
           properties: {
             skus: {
-              type: "array",
+              type: "array" as const,
               items: {
-                type: "object",
+                type: "object" as const,
                 properties: {
-                  code: { type: "string" },
-                  name: { type: "string" },
-                  servingSizeG: { type: "number", nullable: true },
+                  code: { type: "string" as const },
+                  name: { type: "string" as const },
                 },
               },
             },
           },
         },
         MealPlanPushRequest: {
-          type: "object",
+          type: "object" as const,
           required: ["meals"],
           properties: {
             meals: {
-              type: "array",
+              type: "array" as const,
               description: "Array of meals to schedule",
               items: {
-                type: "object",
+                type: "object" as const,
                 required: ["clientName", "mealName", "serviceDate", "mealSlot"],
                 properties: {
-                  clientName: {
-                    type: "string",
-                    description: "Client's full name (e.g., 'Alex')",
-                  },
-                  mealName: {
-                    type: "string",
-                    description: "Name of the meal/dish (e.g., 'Grilled Chicken & Rice'). Matched against existing SKUs or auto-created.",
-                  },
-                  serviceDate: {
-                    type: "string",
-                    format: "date",
-                    description: "Date the meal is served (YYYY-MM-DD)",
-                  },
+                  clientName: { type: "string" as const, description: "Client full name" },
+                  mealName: { type: "string" as const, description: "Meal or dish name" },
+                  serviceDate: { type: "string" as const, description: "YYYY-MM-DD" },
                   mealSlot: {
-                    type: "string",
+                    type: "string" as const,
                     enum: ["breakfast", "lunch", "dinner", "snack", "pre_training", "post_training", "pre_bed"],
-                    description: "Time-of-day slot for the meal",
                   },
-                  servings: {
-                    type: "number",
-                    description: "Number of servings (default: 1)",
-                    default: 1,
-                  },
-                  notes: {
-                    type: "string",
-                    description: "Optional notes (e.g., 'extra veggies', 'no sauce')",
-                  },
+                  servings: { type: "number" as const, description: "Number of servings (default 1)" },
+                  notes: { type: "string" as const, description: "Optional notes" },
                 },
               },
             },
           },
         },
         MealPlanPushResponse: {
-          type: "object",
+          type: "object" as const,
           properties: {
-            created: { type: "integer", description: "Number of new meal schedules created" },
-            skipped: { type: "integer", description: "Number of duplicate meals skipped" },
+            created: { type: "integer" as const, description: "Meals created" },
+            skipped: { type: "integer" as const, description: "Duplicates skipped" },
             skusCreated: {
-              type: "array",
-              items: { type: "string" },
-              description: "Names of auto-created placeholder SKUs",
+              type: "array" as const,
+              items: { type: "string" as const },
+              description: "Auto-created SKU names",
             },
             errors: {
-              type: "array",
-              items: { type: "string" },
-              description: "Any errors encountered",
+              type: "array" as const,
+              items: { type: "string" as const },
+              description: "Errors encountered",
             },
           },
         },
       },
       securitySchemes: {
         BearerAuth: {
-          type: "http",
+          type: "http" as const,
           scheme: "bearer",
-          description: "API key for authentication. Get this from your Numen GPT Setup page.",
         },
       },
     },
-    security: [{ BearerAuth: [] }],
+    security: [{ BearerAuth: [] as string[] }],
   };
 }
