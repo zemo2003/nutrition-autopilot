@@ -103,6 +103,7 @@ type PrepBatchPortionPlan = {
 type PrepShortage = {
   componentId: string;
   componentName: string;
+  componentType: string;
   shortageG: number;
 };
 
@@ -149,6 +150,9 @@ const TYPE_LABELS: Record<string, string> = {
   CONDIMENT: "Condiment",
   OTHER: "Other",
 };
+
+/** Component types that require actual batch prep/cooking */
+const PREP_TYPES = new Set(["PROTEIN", "CARB_BASE", "VEGETABLE", "SAUCE"]);
 
 const NEXT_ACTION_LABELS: Record<string, string> = {
   PLANNED: "Start Prep",
@@ -1617,11 +1621,16 @@ export function KitchenExecutionBoard() {
     return <div className="loading-shimmer" style={{ height: 200, borderRadius: 12 }} />;
   }
 
-  // Prep draft KPIs
+  // Prep draft — only show component types that need actual cooking/prep
+  const suggestions = (prepDraft?.batchSuggestions ?? []).filter(
+    (s) => PREP_TYPES.has(s.componentType),
+  );
+  const prepShortages = (prepDraft?.shortages ?? []).filter(
+    (s) => PREP_TYPES.has(s.componentType),
+  );
   const totalMeals = prepDraft?.totalMeals ?? 0;
-  const totalComponents = prepDraft?.totalComponents ?? 0;
-  const shortageCount = prepDraft?.shortages?.length ?? 0;
-  const suggestions = prepDraft?.batchSuggestions ?? [];
+  const totalComponents = suggestions.length;
+  const shortageCount = prepShortages.length;
   const portionPlansMap = new Map(
     (prepDraft?.portionPlans ?? []).map((pp) => [pp.componentId, pp]),
   );
@@ -1761,7 +1770,7 @@ export function KitchenExecutionBoard() {
                 }}
               >
                 <strong>Shortages:</strong>{" "}
-                {(prepDraft?.shortages ?? [])
+                {prepShortages
                   .map((s) => `${s.componentName} (\u2212${formatG(s.shortageG)})`)
                   .join(", ")}
               </div>
