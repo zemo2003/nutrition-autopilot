@@ -7,7 +7,7 @@ export default function KitchenPage() {
         <span className="breadcrumb"><a href="/">Dashboard</a> / Kitchen</span>
       </div>
       <h1 className="page-title">Kitchen Mode</h1>
-      <p className="page-subtitle">Active batch execution — step-by-step workflow</p>
+      <p className="page-subtitle">Prep queue &amp; batch execution — step-by-step workflow</p>
       <KitchenExecutionBoard />
     </div>
   );

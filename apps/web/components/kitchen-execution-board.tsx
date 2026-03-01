@@ -67,6 +67,66 @@ type BatchDetail = Batch & {
   checkpoints: Checkpoint[];
 };
 
+type PrepBatchSuggestion = {
+  componentId: string;
+  componentName: string;
+  componentType: string;
+  rawG: number;
+  cookedG: number;
+  yieldFactor: number;
+  mealCount: number;
+  priority: "high" | "medium" | "low";
+  isShortage: boolean;
+  sharingOpportunity: boolean;
+  sharedMealCount: number;
+};
+
+type PrepPortionPlanEntry = {
+  label: string;
+  clientId: string;
+  clientName: string;
+  serviceDate: string;
+  mealSlot: string;
+  cookedG: number;
+  mealScheduleId: string;
+};
+
+type PrepBatchPortionPlan = {
+  componentId: string;
+  componentName: string;
+  totalCookedG: number;
+  totalRawG: number;
+  portionCount: number;
+  portions: PrepPortionPlanEntry[];
+};
+
+type PrepShortage = {
+  componentId: string;
+  componentName: string;
+  shortageG: number;
+};
+
+type PrepDraft = {
+  id?: string;
+  weekStart: string;
+  weekEnd: string;
+  batchSuggestions: PrepBatchSuggestion[];
+  shortages: PrepShortage[];
+  totalMeals: number;
+  totalComponents: number;
+  portionPlans?: PrepBatchPortionPlan[];
+};
+
+type BatchPortion = {
+  id: string;
+  label: string;
+  portionG: number;
+  serviceDate: string | null;
+  mealSlot: string | null;
+  clientName: string | null;
+  sealed: boolean;
+};
+
 /* ── Constants ────────────────────────────────────────────── */
 
 const STATUS_ORDER = ["PLANNED", "IN_PREP", "COOKING", "CHILLING", "PORTIONED", "READY"];
@@ -139,6 +199,27 @@ function formatTimer(seconds: number): string {
 
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+function getCurrentMonday(): string {
+  const d = new Date();
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+  d.setDate(diff);
+  return d.toISOString().slice(0, 10);
+}
+
+function addDays(dateStr: string, days: number): string {
+  const d = new Date(dateStr + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function formatDateRange(start: string, end: string): string {
+  const s = new Date(start + "T12:00:00Z");
+  const e = new Date(end + "T12:00:00Z");
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${months[s.getUTCMonth()]} ${s.getUTCDate()} \u2014 ${months[e.getUTCMonth()]} ${e.getUTCDate()}, ${e.getUTCFullYear()}`;
 }
 
 /* ── Hold Button ─────────────────────────────────────────── */
@@ -509,6 +590,11 @@ function BatchExecutionCard({
   onFlagIssue,
   focused,
   onFocus,
+  portionsExpanded,
+  portionsList,
+  portionsIsLoading,
+  onTogglePortions,
+  onToggleSeal,
 }: {
   batch: Batch;
   onAdvance: (batchId: string, newStatus: string, actualYieldG?: number) => Promise<void>;
@@ -516,6 +602,11 @@ function BatchExecutionCard({
   onFlagIssue: (batchId: string, note: string) => void;
   focused: boolean;
   onFocus: () => void;
+  portionsExpanded: boolean;
+  portionsList: BatchPortion[];
+  portionsIsLoading: boolean;
+  onTogglePortions: () => void;
+  onToggleSeal: (portionId: string, sealed: boolean) => void;
 }) {
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [advancing, setAdvancing] = useState(false);
@@ -788,6 +879,92 @@ function BatchExecutionCard({
         )}
       </div>
 
+      {/* Portions panel */}
+      {batch.portionCount !== null && batch.portionCount > 0 && (
+        <div style={{ marginBottom: "var(--sp-3)" }}>
+          <button
+            onClick={(e) => { e.stopPropagation(); onTogglePortions(); }}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              fontSize: "var(--text-xs)",
+              color: "var(--c-primary)",
+              padding: 0,
+              fontWeight: 500,
+            }}
+          >
+            {portionsExpanded ? "\u25B2 Hide" : "\u25BC Show"} {batch.portionCount} portions
+            {(() => {
+              if (portionsList.length === 0) return null;
+              const sealedCount = portionsList.filter((p) => p.sealed).length;
+              if (sealedCount === 0) return null;
+              return (
+                <span style={{ marginLeft: 6, color: "var(--c-success)" }}>
+                  {sealedCount}/{portionsList.length} sealed
+                </span>
+              );
+            })()}
+          </button>
+          {portionsExpanded && (
+            <div style={{
+              borderTop: "1px solid var(--c-border)",
+              marginTop: "var(--sp-2)",
+              paddingTop: "var(--sp-2)",
+            }}>
+              {portionsIsLoading ? (
+                <div style={{ fontSize: "var(--text-sm)", color: "var(--c-ink-muted)" }}>Loading portions...</div>
+              ) : portionsList.length === 0 ? (
+                <div style={{ fontSize: "var(--text-sm)", color: "var(--c-ink-muted)" }}>No individual portions.</div>
+              ) : (
+                <>
+                  <div style={{ fontSize: "var(--text-xs)", color: "var(--c-ink-muted)", marginBottom: "var(--sp-2)" }}>
+                    <strong>{portionsList.filter((p) => p.sealed).length}/{portionsList.length}</strong> portions sealed
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    {portionsList.map((p) => (
+                      <label
+                        key={p.id}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "var(--sp-2)",
+                          padding: "4px 8px",
+                          borderRadius: "var(--r-sm, 4px)",
+                          background: p.sealed ? "var(--c-success-soft, rgba(34,197,94,0.08))" : "transparent",
+                          cursor: "pointer",
+                          fontSize: "var(--text-sm)",
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={p.sealed}
+                          onChange={(e) => onToggleSeal(p.id, e.target.checked)}
+                          style={{ flexShrink: 0 }}
+                        />
+                        <span style={{
+                          flex: 1,
+                          textDecoration: p.sealed ? "line-through" : "none",
+                          color: p.sealed ? "var(--c-ink-muted)" : "var(--c-ink)",
+                        }}>
+                          {p.label}
+                        </span>
+                        {p.sealed && (
+                          <span style={{ color: "var(--c-success)", fontSize: "var(--text-xs)", flexShrink: 0 }}>
+                            &#10003;
+                          </span>
+                        )}
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Timer for COOKING / CHILLING */}
       <TimerDisplay batch={batch} checkpoints={checkpoints} />
 
@@ -912,6 +1089,217 @@ function BatchExecutionCard({
   );
 }
 
+/* ── Prep Queue Card ─────────────────────────────────────── */
+
+function PrepQueueCard({
+  suggestion,
+  portionPlan,
+  expanded,
+  onToggleExpand,
+  onQueueUp,
+  queued,
+  creating,
+}: {
+  suggestion: PrepBatchSuggestion;
+  portionPlan?: PrepBatchPortionPlan;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  onQueueUp: () => void;
+  queued: boolean;
+  creating: boolean;
+}) {
+  const typeLabel = TYPE_LABELS[suggestion.componentType] ?? suggestion.componentType;
+  const priorityColors: Record<string, string> = {
+    high: "var(--c-danger)",
+    medium: "var(--c-accent)",
+    low: "var(--c-info)",
+  };
+  const priorityColor = priorityColors[suggestion.priority] ?? "var(--c-info)";
+  const portionCount = portionPlan?.portionCount ?? suggestion.mealCount;
+
+  return (
+    <div
+      className="card"
+      style={{
+        padding: "var(--sp-5)",
+        borderRadius: "var(--r-lg)",
+        borderLeft: `3px solid ${priorityColor}`,
+      }}
+    >
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: "var(--sp-3)",
+          flexWrap: "wrap",
+          marginBottom: "var(--sp-3)",
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: "var(--text-lg)",
+              fontWeight: "var(--weight-bold)" as string,
+              letterSpacing: "-0.01em",
+            }}
+          >
+            {suggestion.componentName}
+          </div>
+          <div style={{ display: "flex", gap: "var(--sp-2)", flexWrap: "wrap", marginTop: "var(--sp-2)" }}>
+            <span
+              className="badge"
+              style={{
+                background: "var(--c-surface-alt)",
+                color: "var(--c-ink-soft)",
+                border: "1px solid var(--c-border-light)",
+                fontSize: 12,
+                fontWeight: "var(--weight-semibold)" as string,
+              }}
+            >
+              {typeLabel}
+            </span>
+            <span
+              className="badge"
+              style={{
+                background: `${priorityColor}22`,
+                color: priorityColor,
+                border: `1px solid ${priorityColor}44`,
+                fontSize: 12,
+                fontWeight: "var(--weight-bold)" as string,
+              }}
+            >
+              {suggestion.priority.charAt(0).toUpperCase() + suggestion.priority.slice(1)} Priority
+            </span>
+            {suggestion.isShortage && (
+              <span
+                className="badge"
+                style={{
+                  background: "rgba(239,68,68,0.1)",
+                  color: "var(--c-danger)",
+                  border: "1px solid rgba(239,68,68,0.3)",
+                  fontSize: 12,
+                  fontWeight: "var(--weight-semibold)" as string,
+                }}
+              >
+                Shortage
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Metrics */}
+      <div
+        style={{
+          display: "flex",
+          gap: "var(--sp-4)",
+          flexWrap: "wrap",
+          marginBottom: "var(--sp-3)",
+          padding: "var(--sp-3)",
+          background: "var(--c-surface-alt)",
+          borderRadius: "var(--r-md)",
+          fontSize: "var(--text-sm)",
+        }}
+      >
+        <div>
+          <span style={{ color: "var(--c-ink-muted)", fontSize: "var(--text-xs)" }}>Raw</span>
+          <div style={{ fontWeight: "var(--weight-semibold)" as string, fontVariantNumeric: "tabular-nums" }}>
+            {formatG(suggestion.rawG)}
+          </div>
+        </div>
+        <div style={{ color: "var(--c-ink-muted)", display: "flex", alignItems: "center" }}>&#8594;</div>
+        <div>
+          <span style={{ color: "var(--c-ink-muted)", fontSize: "var(--text-xs)" }}>Cooked</span>
+          <div style={{ fontWeight: "var(--weight-semibold)" as string, fontVariantNumeric: "tabular-nums" }}>
+            {formatG(suggestion.cookedG)}
+          </div>
+        </div>
+        <div style={{ color: "var(--c-ink-muted)", display: "flex", alignItems: "center" }}>|</div>
+        <div>
+          <span style={{ color: "var(--c-ink-muted)", fontSize: "var(--text-xs)" }}>Yield</span>
+          <div style={{ fontWeight: "var(--weight-semibold)" as string, fontVariantNumeric: "tabular-nums" }}>
+            {suggestion.yieldFactor.toFixed(2)}
+          </div>
+        </div>
+        <div style={{ color: "var(--c-ink-muted)", display: "flex", alignItems: "center" }}>|</div>
+        <div>
+          <span style={{ color: "var(--c-ink-muted)", fontSize: "var(--text-xs)" }}>Meals</span>
+          <div style={{ fontWeight: "var(--weight-semibold)" as string, fontVariantNumeric: "tabular-nums" }}>
+            {suggestion.mealCount}
+          </div>
+        </div>
+        <div style={{ color: "var(--c-ink-muted)", display: "flex", alignItems: "center" }}>|</div>
+        <div>
+          <span style={{ color: "var(--c-ink-muted)", fontSize: "var(--text-xs)" }}>Portions</span>
+          <div style={{ fontWeight: "var(--weight-semibold)" as string, fontVariantNumeric: "tabular-nums" }}>
+            {portionCount}
+          </div>
+        </div>
+      </div>
+
+      {/* Portions toggle */}
+      {portionPlan && portionPlan.portionCount > 0 && (
+        <div style={{ marginBottom: "var(--sp-3)" }}>
+          <button
+            onClick={onToggleExpand}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              fontSize: "var(--text-xs)",
+              color: "var(--c-primary)",
+              padding: 0,
+              fontWeight: 500,
+            }}
+          >
+            {expanded ? "\u25B2 Hide" : "\u25BC Show"} {portionPlan.portionCount} portions
+          </button>
+          {expanded && (
+            <div
+              style={{
+                marginTop: "var(--sp-2)",
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+              }}
+            >
+              {portionPlan.portions.map((p, i) => (
+                <div
+                  key={i}
+                  style={{
+                    padding: "4px 8px",
+                    borderRadius: "var(--r-sm, 4px)",
+                    fontSize: "var(--text-sm)",
+                    color: "var(--c-ink-soft)",
+                  }}
+                >
+                  {p.label}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Queue Up button */}
+      <button
+        className={`btn btn-sm ${queued ? "btn-outline" : "btn-primary"}`}
+        disabled={queued || creating}
+        onClick={onQueueUp}
+        style={{
+          width: "100%",
+          minHeight: 40,
+          ...(queued ? { color: "var(--c-success)", borderColor: "var(--c-success)" } : {}),
+        }}
+      >
+        {creating ? "Creating..." : queued ? "\u2713 Queued" : "Queue Up"}
+      </button>
+    </div>
+  );
+}
+
 /* ── Main Board ──────────────────────────────────────────── */
 
 export function KitchenExecutionBoard() {
@@ -919,6 +1307,21 @@ export function KitchenExecutionBoard() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterKey>("active");
   const [focusedBatchId, setFocusedBatchId] = useState<string | null>(null);
+
+  // Prep Queue state
+  const [weekStart, setWeekStart] = useState(() => getCurrentMonday());
+  const [weekEnd, setWeekEnd] = useState(() => addDays(getCurrentMonday(), 6));
+  const [prepDraft, setPrepDraft] = useState<PrepDraft | null>(null);
+  const [prepLoading, setPrepLoading] = useState(true);
+  const [prepError, setPrepError] = useState<string | null>(null);
+  const [creatingBatchFor, setCreatingBatchFor] = useState<string | null>(null);
+  const [queuedComponentIds, setQueuedComponentIds] = useState<Set<string>>(new Set());
+  const [expandedSuggestions, setExpandedSuggestions] = useState<Set<string>>(new Set());
+
+  // Portions state for execution batch cards
+  const [portionsCache, setPortionsCache] = useState<Record<string, BatchPortion[]>>({});
+  const [expandedPortions, setExpandedPortions] = useState<Set<string>>(new Set());
+  const [portionsLoading, setPortionsLoading] = useState<Set<string>>(new Set());
 
   const apiBase = resolveApiBase();
 
@@ -974,6 +1377,153 @@ export function KitchenExecutionBoard() {
     const id = setInterval(fetchBatches, 30_000);
     return () => clearInterval(id);
   }, [fetchBatches]);
+
+  /* ── Prep Draft ────────────────────────────────────── */
+
+  const fetchPrepDraft = useCallback(async () => {
+    setPrepLoading(true);
+    setPrepError(null);
+    try {
+      const [draftRes, batchesRes] = await Promise.all([
+        fetch(`${apiBase}/v1/prep-drafts`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ weekStart, weekEnd, scheduleAware: true }),
+        }),
+        fetch(`${apiBase}/v1/batches?status=PLANNED,IN_PREP,COOKING,CHILLING,PORTIONED,READY`),
+      ]);
+      if (!draftRes.ok) {
+        setPrepError("Failed to load prep draft");
+        return;
+      }
+      const draftData = await draftRes.json();
+      setPrepDraft(draftData.draft);
+
+      // Dedup: mark suggestions whose component already has a batch
+      if (batchesRes.ok) {
+        const existingBatches: Batch[] = await batchesRes.json();
+        const existingNames = new Set(existingBatches.map((b) => b.componentName));
+        const suggestions: PrepBatchSuggestion[] = draftData.draft?.batchSuggestions ?? [];
+        const queued = new Set<string>();
+        for (const s of suggestions) {
+          if (existingNames.has(s.componentName)) {
+            queued.add(s.componentId);
+          }
+        }
+        setQueuedComponentIds(queued);
+      }
+    } catch {
+      setPrepError("Failed to load prep draft");
+    } finally {
+      setPrepLoading(false);
+    }
+  }, [apiBase, weekStart, weekEnd]);
+
+  useEffect(() => {
+    fetchPrepDraft();
+  }, [fetchPrepDraft]);
+
+  const shiftWeek = useCallback((days: number) => {
+    setWeekStart((prev) => {
+      const next = addDays(prev, days);
+      setWeekEnd(addDays(next, 6));
+      return next;
+    });
+  }, []);
+
+  const handleCreateFromSchedule = useCallback(
+    async (componentId: string) => {
+      setCreatingBatchFor(componentId);
+      try {
+        const res = await fetch(`${apiBase}/v1/batches/from-schedule`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ componentId, weekStart, weekEnd }),
+        });
+        if (res.ok) {
+          setQueuedComponentIds((prev) => new Set(prev).add(componentId));
+          await fetchBatches();
+        }
+      } catch {
+        // silent
+      } finally {
+        setCreatingBatchFor(null);
+      }
+    },
+    [apiBase, weekStart, weekEnd, fetchBatches],
+  );
+
+  const toggleSuggestionExpand = useCallback((componentId: string) => {
+    setExpandedSuggestions((prev) => {
+      const next = new Set(prev);
+      if (next.has(componentId)) {
+        next.delete(componentId);
+      } else {
+        next.add(componentId);
+      }
+      return next;
+    });
+  }, []);
+
+  /* ── Portions (execution cards) ────────────────────── */
+
+  const togglePortions = useCallback(
+    async (batchId: string) => {
+      setExpandedPortions((prev) => {
+        const next = new Set(prev);
+        if (next.has(batchId)) {
+          next.delete(batchId);
+        } else {
+          next.add(batchId);
+        }
+        return next;
+      });
+
+      if (!portionsCache[batchId]) {
+        setPortionsLoading((prev) => new Set(prev).add(batchId));
+        try {
+          const res = await fetch(`${apiBase}/v1/batches/${batchId}/portions`);
+          if (res.ok) {
+            const data = await res.json();
+            setPortionsCache((prev) => ({ ...prev, [batchId]: data.portions ?? [] }));
+          }
+        } catch {
+          // silent
+        } finally {
+          setPortionsLoading((prev) => {
+            const next = new Set(prev);
+            next.delete(batchId);
+            return next;
+          });
+        }
+      }
+    },
+    [apiBase, portionsCache],
+  );
+
+  const handleToggleSeal = useCallback(
+    async (batchId: string, portionId: string, sealed: boolean) => {
+      try {
+        const res = await fetch(`${apiBase}/v1/batches/${batchId}/portions/${portionId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sealed }),
+        });
+        if (res.ok) {
+          setPortionsCache((prev) => {
+            const portions = prev[batchId] ?? [];
+            return {
+              ...prev,
+              [batchId]: portions.map((p) => (p.id === portionId ? { ...p, sealed } : p)),
+            };
+          });
+        }
+      } catch {
+        // silent
+      }
+    },
+    [apiBase],
+  );
 
   /* ── Actions ───────────────────────────────────────── */
 
@@ -1067,8 +1617,187 @@ export function KitchenExecutionBoard() {
     return <div className="loading-shimmer" style={{ height: 200, borderRadius: 12 }} />;
   }
 
+  // Prep draft KPIs
+  const totalMeals = prepDraft?.totalMeals ?? 0;
+  const totalComponents = prepDraft?.totalComponents ?? 0;
+  const shortageCount = prepDraft?.shortages?.length ?? 0;
+  const suggestions = prepDraft?.batchSuggestions ?? [];
+  const portionPlansMap = new Map(
+    (prepDraft?.portionPlans ?? []).map((pp) => [pp.componentId, pp]),
+  );
+
   return (
     <div style={{ paddingBottom: 100 }}>
+      {/* ── Prep Queue Section ───────────────────── */}
+      <div style={{ marginBottom: "var(--sp-8)" }}>
+        <h2
+          style={{
+            fontSize: "var(--text-lg)",
+            fontWeight: "var(--weight-bold)" as string,
+            marginBottom: "var(--sp-4)",
+            letterSpacing: "-0.01em",
+          }}
+        >
+          Prep Queue
+        </h2>
+
+        {/* Week navigator */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--sp-3)",
+            marginBottom: "var(--sp-4)",
+          }}
+        >
+          <button className="btn btn-outline btn-sm" onClick={() => shiftWeek(-7)}>
+            &larr; Prev Week
+          </button>
+          <div style={{ flex: 1, textAlign: "center", fontWeight: 600, fontSize: "var(--text-sm)" }}>
+            {formatDateRange(weekStart, weekEnd)}
+          </div>
+          <button className="btn btn-outline btn-sm" onClick={() => shiftWeek(7)}>
+            Next Week &rarr;
+          </button>
+        </div>
+
+        {prepLoading ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+            <div className="loading-shimmer" style={{ height: 60, borderRadius: "var(--r-md)" }} />
+            <div className="loading-shimmer" style={{ height: 120, borderRadius: "var(--r-md)" }} />
+          </div>
+        ) : prepError ? (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "var(--sp-3)",
+              padding: "var(--sp-3) var(--sp-4)",
+              background: "var(--c-danger-soft)",
+              color: "var(--c-danger)",
+              border: "1px solid rgba(239,68,68,0.3)",
+              borderRadius: "var(--r-md)",
+              fontSize: "var(--text-sm)",
+            }}
+          >
+            <span>{prepError}</span>
+            <button
+              className="btn btn-sm"
+              style={{ background: "var(--c-danger)", color: "#fff" }}
+              onClick={fetchPrepDraft}
+            >
+              Retry
+            </button>
+          </div>
+        ) : suggestions.length === 0 ? (
+          <div className="state-box" style={{ textAlign: "center", padding: "var(--sp-6)" }}>
+            <div className="state-title">No meals scheduled</div>
+            <div className="state-desc">
+              No meals are scheduled for this week. Use the meal planner to add meals first.
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* KPI row */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                gap: "var(--sp-3)",
+                marginBottom: "var(--sp-4)",
+              }}
+            >
+              <div className="card" style={{ padding: "var(--sp-3)", textAlign: "center" }}>
+                <div
+                  style={{
+                    fontSize: "var(--text-xl)",
+                    fontWeight: "var(--weight-bold)" as string,
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  {totalMeals}
+                </div>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--c-ink-muted)" }}>meals</div>
+              </div>
+              <div className="card" style={{ padding: "var(--sp-3)", textAlign: "center" }}>
+                <div
+                  style={{
+                    fontSize: "var(--text-xl)",
+                    fontWeight: "var(--weight-bold)" as string,
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  {totalComponents}
+                </div>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--c-ink-muted)" }}>components</div>
+              </div>
+              <div className="card" style={{ padding: "var(--sp-3)", textAlign: "center" }}>
+                <div
+                  style={{
+                    fontSize: "var(--text-xl)",
+                    fontWeight: "var(--weight-bold)" as string,
+                    fontVariantNumeric: "tabular-nums",
+                    color: shortageCount > 0 ? "var(--c-danger)" : undefined,
+                  }}
+                >
+                  {shortageCount}
+                </div>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--c-ink-muted)" }}>shortages</div>
+              </div>
+            </div>
+
+            {/* Shortage warning banner */}
+            {shortageCount > 0 && (
+              <div
+                style={{
+                  padding: "var(--sp-3) var(--sp-4)",
+                  background: "rgba(239,68,68,0.08)",
+                  border: "1px solid rgba(239,68,68,0.25)",
+                  borderRadius: "var(--r-md)",
+                  marginBottom: "var(--sp-4)",
+                  fontSize: "var(--text-sm)",
+                  color: "var(--c-danger)",
+                }}
+              >
+                <strong>Shortages:</strong>{" "}
+                {(prepDraft?.shortages ?? [])
+                  .map((s) => `${s.componentName} (\u2212${formatG(s.shortageG)})`)
+                  .join(", ")}
+              </div>
+            )}
+
+            {/* Suggestion cards */}
+            <div className="stack" style={{ gap: "var(--sp-4)" }}>
+              {suggestions.map((s) => (
+                <PrepQueueCard
+                  key={s.componentId}
+                  suggestion={s}
+                  portionPlan={portionPlansMap.get(s.componentId)}
+                  expanded={expandedSuggestions.has(s.componentId)}
+                  onToggleExpand={() => toggleSuggestionExpand(s.componentId)}
+                  onQueueUp={() => handleCreateFromSchedule(s.componentId)}
+                  queued={queuedComponentIds.has(s.componentId)}
+                  creating={creatingBatchFor === s.componentId}
+                />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Active Batches Section ───────────────────── */}
+      <h2
+        style={{
+          fontSize: "var(--text-lg)",
+          fontWeight: "var(--weight-bold)" as string,
+          marginBottom: "var(--sp-4)",
+          letterSpacing: "-0.01em",
+        }}
+      >
+        Active Batches
+      </h2>
+
       {/* Filter pills */}
       <div
         className="row"
@@ -1116,6 +1845,11 @@ export function KitchenExecutionBoard() {
             onFlagIssue={handleFlagIssue}
             focused={focusedBatchId === batch.id}
             onFocus={() => setFocusedBatchId(batch.id)}
+            portionsExpanded={expandedPortions.has(batch.id)}
+            portionsList={portionsCache[batch.id] ?? []}
+            portionsIsLoading={portionsLoading.has(batch.id)}
+            onTogglePortions={() => togglePortions(batch.id)}
+            onToggleSeal={(portionId, sealed) => handleToggleSeal(batch.id, portionId, sealed)}
           />
         ))}
       </div>
