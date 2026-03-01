@@ -6628,7 +6628,7 @@ v1Router.post("/meal-plans/push", requireApiKey, async (req: express.Request, re
   const org = await getPrimaryOrganization();
   const { meals } = parsed.data;
 
-  // Pre-load clients and SKUs for resolution
+  // Pre-load clients, SKUs, and ingredients for resolution
   const clients = await prisma.client.findMany({
     where: { organizationId: org.id },
     select: { id: true, fullName: true },
@@ -6639,7 +6639,47 @@ v1Router.post("/meal-plans/push", requireApiKey, async (req: express.Request, re
     select: { id: true, code: true, name: true },
   });
 
-  const results = { created: 0, skipped: 0, skusCreated: [] as string[], errors: [] as string[] };
+  const existingIngredients = await prisma.ingredientCatalog.findMany({
+    where: { organizationId: org.id, active: true },
+    select: { id: true, canonicalKey: true, name: true },
+  });
+
+  const results = {
+    created: 0,
+    skipped: 0,
+    skusCreated: [] as string[],
+    recipesCreated: [] as string[],
+    ingredientsCreated: [] as string[],
+    errors: [] as string[],
+  };
+
+  // Helper: build a canonical key from ingredient name
+  const toCanonicalKey = (name: string) =>
+    name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+  // Helper: resolve or create an ingredient
+  const resolveIngredient = async (name: string, category: string) => {
+    const key = toCanonicalKey(name);
+    let ing = existingIngredients.find(
+      (i) => i.canonicalKey === key || i.name.toLowerCase() === name.toLowerCase()
+    );
+    if (!ing) {
+      ing = await prisma.ingredientCatalog.create({
+        data: {
+          organizationId: org.id,
+          canonicalKey: key || `ing-${Date.now()}`,
+          name,
+          category,
+          defaultUnit: "g",
+          active: true,
+        },
+        select: { id: true, canonicalKey: true, name: true },
+      });
+      existingIngredients.push(ing);
+      results.ingredientsCreated.push(name);
+    }
+    return ing;
+  };
 
   for (const meal of meals) {
     // 1. Resolve client by name (case-insensitive)
@@ -6683,6 +6723,7 @@ v1Router.post("/meal-plans/push", requireApiKey, async (req: express.Request, re
       }
     }
 
+    let skuIsNew = false;
     if (!sku) {
       // Auto-create placeholder SKU
       const code = meal.mealName
@@ -6691,22 +6732,70 @@ v1Router.post("/meal-plans/push", requireApiKey, async (req: express.Request, re
         .replace(/^-|-$/g, "")
         .slice(0, 30);
 
+      // Calculate total serving size from ingredients if available
+      const totalG = meal.ingredients
+        ? meal.ingredients.reduce((sum, ing) => sum + ing.grams, 0)
+        : 0;
+
       const newSku = await prisma.sku.create({
         data: {
           organizationId: org.id,
           code: code || `SKU-${Date.now()}`,
           name: meal.mealName,
-          servingSizeG: 0,
+          servingSizeG: Math.round(totalG),
           active: true,
         },
         select: { id: true, code: true, name: true },
       });
       existingSkus.push(newSku);
       sku = newSku;
+      skuIsNew = true;
       results.skusCreated.push(meal.mealName);
     }
 
-    // 3. Normalize meal slot to uppercase
+    // 3. Create recipe with ingredients if provided and SKU is new (or has no recipe)
+    if (meal.ingredients && meal.ingredients.length > 0) {
+      // Check if this SKU already has an active recipe
+      const existingRecipe = await prisma.recipe.findFirst({
+        where: { skuId: sku.id, active: true },
+      });
+
+      if (!existingRecipe) {
+        // Create the recipe
+        const recipe = await prisma.recipe.create({
+          data: {
+            organizationId: org.id,
+            skuId: sku.id,
+            name: meal.mealName,
+            servings: meal.servings ?? 1,
+            active: true,
+            createdBy: "chatgpt-push",
+          },
+        });
+
+        // Create recipe lines with ingredient resolution
+        for (let i = 0; i < meal.ingredients.length; i++) {
+          const ingLine = meal.ingredients[i]!;
+          const ingredient = await resolveIngredient(ingLine.name, ingLine.category ?? "general");
+
+          await prisma.recipeLine.create({
+            data: {
+              recipeId: recipe.id,
+              ingredientId: ingredient.id,
+              lineOrder: i + 1,
+              targetGPerServing: ingLine.grams,
+              preparedState: (ingLine.preparedState as "RAW" | "COOKED" | "DRY" | "CANNED" | "FROZEN") ?? "RAW",
+              required: true,
+              createdBy: "chatgpt-push",
+            },
+          });
+        }
+
+        results.recipesCreated.push(meal.mealName);
+      }
+    }
+
+    // 4. Normalize meal slot to uppercase
     const mealSlot = meal.mealSlot.toUpperCase() as
       | "BREAKFAST"
       | "LUNCH"
@@ -6716,10 +6805,10 @@ v1Router.post("/meal-plans/push", requireApiKey, async (req: express.Request, re
       | "POST_TRAINING"
       | "PRE_BED";
 
-    // 4. Parse service date
+    // 5. Parse service date
     const serviceDate = new Date(meal.serviceDate + "T00:00:00Z");
 
-    // 5. Dedup check — same client + date + slot + sku
+    // 6. Dedup check — same client + date + slot + sku
     const existing = await prisma.mealSchedule.findFirst({
       where: {
         clientId: client.id,
@@ -6734,7 +6823,7 @@ v1Router.post("/meal-plans/push", requireApiKey, async (req: express.Request, re
       continue;
     }
 
-    // 6. Create MealSchedule
+    // 7. Create MealSchedule
     await prisma.mealSchedule.create({
       data: {
         organizationId: org.id,

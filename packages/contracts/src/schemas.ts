@@ -342,6 +342,13 @@ const mealSlotEnum = z.enum([
   "PRE_TRAINING", "POST_TRAINING", "PRE_BED",
 ]);
 
+const ingredientLineSchema = z.object({
+  name: z.string().min(1),
+  grams: z.number().positive(),
+  preparedState: z.enum(["RAW", "COOKED", "DRY", "CANNED", "FROZEN"]).optional().default("RAW"),
+  category: z.string().optional().default("general"),
+});
+
 export const mealPlanPushBodySchema = z.object({
   meals: z.array(z.object({
     clientName: z.string().min(1),
@@ -350,6 +357,7 @@ export const mealPlanPushBodySchema = z.object({
     mealSlot: mealSlotEnum,
     servings: z.number().positive().optional().default(1),
     notes: z.string().optional(),
+    ingredients: z.array(ingredientLineSchema).optional(),
   })).min(1).max(200),
 });
 

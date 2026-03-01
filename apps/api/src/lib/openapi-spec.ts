@@ -48,8 +48,8 @@ export function buildOpenApiSpec(apiBaseUrl: string) {
       "/v1/meal-plans/push": {
         post: {
           operationId: "pushMealPlan",
-          summary: "Push a meal plan",
-          description: "Create meal schedules for one or more days. Unmatched meal names auto-create placeholder SKUs. Duplicates are skipped.",
+          summary: "Push a meal plan with optional recipes",
+          description: "Create meal schedules for one or more days. Include ingredients per meal to auto-create recipes. Unmatched meal names auto-create SKUs. Unmatched ingredients auto-create catalog entries. Duplicates are skipped.",
           requestBody: {
             required: true,
             content: {
@@ -123,20 +123,52 @@ export function buildOpenApiSpec(apiBaseUrl: string) {
                   },
                   servings: { type: "number" as const, description: "Number of servings (default 1)" },
                   notes: { type: "string" as const, description: "Optional notes" },
+                  ingredients: {
+                    type: "array" as const,
+                    description: "Optional recipe ingredients with gram weights. When provided, a Recipe is auto-created for new SKUs.",
+                    items: { $ref: "#/components/schemas/IngredientLine" },
+                  },
                 },
               },
+            },
+          },
+        },
+        IngredientLine: {
+          type: "object" as const,
+          required: ["name", "grams"],
+          properties: {
+            name: { type: "string" as const, description: "Ingredient name (e.g. 'Rolled oats', 'Chicken breast')" },
+            grams: { type: "number" as const, description: "Weight in grams per serving" },
+            preparedState: {
+              type: "string" as const,
+              enum: ["RAW", "COOKED", "DRY", "CANNED", "FROZEN"],
+              description: "State of ingredient (default RAW). Use COOKED for pre-cooked items like sous vide chicken or cooked quinoa.",
+            },
+            category: {
+              type: "string" as const,
+              description: "Ingredient category (e.g. 'protein', 'grain', 'vegetable', 'dairy', 'sauce', 'spice'). Default 'general'.",
             },
           },
         },
         MealPlanPushResponse: {
           type: "object" as const,
           properties: {
-            created: { type: "integer" as const, description: "Meals created" },
+            created: { type: "integer" as const, description: "Meals scheduled" },
             skipped: { type: "integer" as const, description: "Duplicates skipped" },
             skusCreated: {
               type: "array" as const,
               items: { type: "string" as const },
               description: "Auto-created SKU names",
+            },
+            recipesCreated: {
+              type: "array" as const,
+              items: { type: "string" as const },
+              description: "Auto-created recipe names (with ingredient lists)",
+            },
+            ingredientsCreated: {
+              type: "array" as const,
+              items: { type: "string" as const },
+              description: "Auto-created ingredient catalog entries",
             },
             errors: {
               type: "array" as const,
