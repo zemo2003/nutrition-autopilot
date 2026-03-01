@@ -151,8 +151,8 @@ const TYPE_LABELS: Record<string, string> = {
   OTHER: "Other",
 };
 
-/** Component types that require actual batch prep/cooking */
-const PREP_TYPES = new Set(["PROTEIN", "CARB_BASE", "VEGETABLE", "SAUCE"]);
+/** Minimum cooked grams to show in prep queue — filters out seasonings/condiments */
+const PREP_MIN_COOKED_G = 50;
 
 const NEXT_ACTION_LABELS: Record<string, string> = {
   PLANNED: "Start Prep",
@@ -1613,12 +1613,12 @@ export function KitchenExecutionBoard() {
     return <div className="loading-shimmer" style={{ height: 200, borderRadius: 12 }} />;
   }
 
-  // Prep draft — only show component types that need actual cooking/prep
+  // Prep draft — filter out trivial items (seasonings, condiments) by volume
   const suggestions = (prepDraft?.batchSuggestions ?? []).filter(
-    (s) => PREP_TYPES.has(s.componentType),
+    (s) => s.cookedG >= PREP_MIN_COOKED_G,
   );
   const prepShortages = (prepDraft?.shortages ?? []).filter(
-    (s) => PREP_TYPES.has(s.componentType),
+    (s) => s.shortageG >= PREP_MIN_COOKED_G,
   );
   const totalMeals = prepDraft?.totalMeals ?? 0;
   const totalComponents = suggestions.length;
