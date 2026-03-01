@@ -49,7 +49,7 @@ export function buildOpenApiSpec(apiBaseUrl: string) {
         post: {
           operationId: "pushMealPlan",
           summary: "Push a meal plan with optional recipes",
-          description: "Create meal schedules for one or more days. Include ingredients per meal to auto-create recipes. Ingredients with category 'sauce' also auto-create standalone sauce Components with protein pairings. Unmatched meal names auto-create SKUs. Unmatched ingredients auto-create catalog entries. Duplicates are skipped.",
+          description: "Schedule meals with optional ingredients. Auto-creates SKUs, recipes, ingredient catalog entries, and sauce Components. Duplicates skipped.",
           requestBody: {
             required: true,
             content: {
