@@ -205,14 +205,6 @@ function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function getCurrentMonday(): string {
-  const d = new Date();
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-  d.setDate(diff);
-  return d.toISOString().slice(0, 10);
-}
-
 function addDays(dateStr: string, days: number): string {
   const d = new Date(dateStr + "T12:00:00Z");
   d.setUTCDate(d.getUTCDate() + days);
@@ -1312,9 +1304,9 @@ export function KitchenExecutionBoard() {
   const [filter, setFilter] = useState<FilterKey>("active");
   const [focusedBatchId, setFocusedBatchId] = useState<string | null>(null);
 
-  // Prep Queue state
-  const [weekStart, setWeekStart] = useState(() => getCurrentMonday());
-  const [weekEnd, setWeekEnd] = useState(() => addDays(getCurrentMonday(), 6));
+  // Prep Queue state — always starts from today, no looking back
+  const [weekStart, setWeekStart] = useState(() => todayISO());
+  const [weekEnd, setWeekEnd] = useState(() => addDays(todayISO(), 6));
   const [prepDraft, setPrepDraft] = useState<PrepDraft | null>(null);
   const [prepLoading, setPrepLoading] = useState(true);
   const [prepError, setPrepError] = useState<string | null>(null);
@@ -1659,7 +1651,11 @@ export function KitchenExecutionBoard() {
             marginBottom: "var(--sp-4)",
           }}
         >
-          <button className="btn btn-outline btn-sm" onClick={() => shiftWeek(-7)}>
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={() => shiftWeek(-7)}
+            disabled={weekStart <= todayISO()}
+          >
             &larr; Prev Week
           </button>
           <div style={{ flex: 1, textAlign: "center", fontWeight: 600, fontSize: "var(--text-sm)" }}>
