@@ -49,7 +49,7 @@ export function buildOpenApiSpec(apiBaseUrl: string) {
         post: {
           operationId: "pushMealPlan",
           summary: "Push a meal plan with optional recipes",
-          description: "Create meal schedules for one or more days. Include ingredients per meal to auto-create recipes. Unmatched meal names auto-create SKUs. Unmatched ingredients auto-create catalog entries. Duplicates are skipped.",
+          description: "Create meal schedules for one or more days. Include ingredients per meal to auto-create recipes. Ingredients with category 'sauce' also auto-create standalone sauce Components with protein pairings. Unmatched meal names auto-create SKUs. Unmatched ingredients auto-create catalog entries. Duplicates are skipped.",
           requestBody: {
             required: true,
             content: {
@@ -146,7 +146,7 @@ export function buildOpenApiSpec(apiBaseUrl: string) {
             },
             category: {
               type: "string" as const,
-              description: "Ingredient category (e.g. 'protein', 'grain', 'vegetable', 'dairy', 'sauce', 'spice'). Default 'general'.",
+              description: "Ingredient category. Use 'sauce' to auto-create a standalone sauce Component. Other values: 'protein', 'grain', 'vegetable', 'dairy', 'fruit', 'fat', 'spice', 'legume', 'nut', 'fish', 'general'.",
             },
           },
         },
@@ -169,6 +169,11 @@ export function buildOpenApiSpec(apiBaseUrl: string) {
               type: "array" as const,
               items: { type: "string" as const },
               description: "Auto-created ingredient catalog entries",
+            },
+            saucesCreated: {
+              type: "array" as const,
+              items: { type: "string" as const },
+              description: "Auto-created sauce Components (with protein pairings)",
             },
             errors: {
               type: "array" as const,

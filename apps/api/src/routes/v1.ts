@@ -6644,12 +6644,18 @@ v1Router.post("/meal-plans/push", requireApiKey, async (req: express.Request, re
     select: { id: true, canonicalKey: true, name: true },
   });
 
+  const existingComponents = await prisma.component.findMany({
+    where: { organizationId: org.id, active: true, componentType: ComponentType.SAUCE },
+    select: { id: true, name: true },
+  });
+
   const results = {
     created: 0,
     skipped: 0,
     skusCreated: [] as string[],
     recipesCreated: [] as string[],
     ingredientsCreated: [] as string[],
+    saucesCreated: [] as string[],
     errors: [] as string[],
   };
 
@@ -6792,6 +6798,62 @@ v1Router.post("/meal-plans/push", requireApiKey, async (req: express.Request, re
         }
 
         results.recipesCreated.push(meal.mealName);
+      }
+
+      // Auto-create sauce Components for ingredients with category "sauce"
+      const sauceIngredients = meal.ingredients.filter(
+        (ing) => (ing.category ?? "general").toLowerCase() === "sauce"
+      );
+
+      for (const sauceIng of sauceIngredients) {
+        const sauceName = sauceIng.name;
+        const sauceKey = sauceName.toLowerCase();
+
+        // Check if sauce Component already exists
+        const existingSauce = existingComponents.find(
+          (c) => c.name.toLowerCase() === sauceKey
+        );
+        if (existingSauce) continue;
+
+        // Create the sauce Component
+        const sauceComponent = await prisma.component.create({
+          data: {
+            organizationId: org.id,
+            name: sauceName,
+            componentType: ComponentType.SAUCE,
+            description: `Auto-created from ChatGPT meal plan push`,
+            defaultYieldFactor: 1.0,
+            storageLocation: StorageLocation.FRIDGE,
+            active: true,
+            portionIncrementG: sauceIng.grams,
+            createdBy: "chatgpt-push",
+          },
+          select: { id: true, name: true },
+        });
+        existingComponents.push(sauceComponent);
+        results.saucesCreated.push(sauceName);
+
+        // Detect the primary protein type in this meal for SaucePairing
+        const proteinCategories = ["protein", "fish"];
+        const hasProtein = meal.ingredients.some(
+          (ing) => proteinCategories.includes((ing.category ?? "").toLowerCase())
+        );
+        if (hasProtein) {
+          try {
+            await prisma.saucePairing.create({
+              data: {
+                sauceComponentId: sauceComponent.id,
+                pairedComponentType: ComponentType.PROTEIN,
+                recommended: true,
+                defaultPortionG: sauceIng.grams,
+                notes: `Auto-paired from meal: ${meal.mealName}`,
+                createdBy: "chatgpt-push",
+              },
+            });
+          } catch {
+            // Ignore duplicate pairing errors
+          }
+        }
       }
     }
 
