@@ -122,11 +122,12 @@ function orderedNutrients(values: Record<string, number>): Array<{ key: string; 
 }
 
 // Category grouping for recipe breakdown (matches schedule page)
-const CATEGORY_ORDER = ["protein", "vegetable", "grain", "fruit", "dairy", "fat", "condiment", "other", "unmapped"];
+const CATEGORY_ORDER = ["protein", "vegetable", "grain", "grains", "fruit", "dairy", "fat", "condiment", "other", "unmapped"];
 const CATEGORY_LABELS: Record<string, string> = {
   protein: "Protein",
   vegetable: "Vegetables & Carbs",
   grain: "Grains",
+  grains: "Grains",
   fruit: "Fruit",
   dairy: "Dairy",
   fat: "Fats & Oils",

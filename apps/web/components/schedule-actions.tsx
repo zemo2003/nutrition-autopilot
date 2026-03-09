@@ -74,11 +74,12 @@ function slotSortKey(slot: string): number {
 }
 
 // Group categories for chef-friendly display order
-const CATEGORY_ORDER = ["protein", "vegetable", "grain", "fruit", "dairy", "fat", "condiment", "other", "unmapped"];
+const CATEGORY_ORDER = ["protein", "vegetable", "grain", "grains", "fruit", "dairy", "fat", "condiment", "other", "unmapped"];
 const CATEGORY_LABELS: Record<string, string> = {
   protein: "Protein",
   vegetable: "Vegetables & Carbs",
   grain: "Grains",
+  grains: "Grains",
   fruit: "Fruit",
   dairy: "Dairy",
   fat: "Fats & Oils",
