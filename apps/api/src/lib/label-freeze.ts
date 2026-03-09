@@ -433,10 +433,10 @@ export async function freezeLabelFromScheduleDone(input: {
         );
         const hasRequiredCore = coreQualityKeys.every((key) => corePresent.has(key));
 
-        // In strict mode, block only synthetic lots and historical exceptions.
-        // Real imported lots with incomplete nutrients are allowed but flagged —
-        // the label will be marked provisional downstream via evidenceSummary.
-        if (strictMode && (syntheticLot || nutrientRows.some((row) => row.historicalException))) {
+        // In strict mode, block historical exceptions but allow synthetic lots
+        // through — they carry real (USDA-approximate) nutrient data and are
+        // already flagged as provisional via evidenceSummary downstream.
+        if (strictMode && nutrientRows.some((row) => row.historicalException)) {
           continue;
         }
 
