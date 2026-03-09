@@ -1328,7 +1328,28 @@ v1Router.get("/schedules/:id/label-preview", async (req, res) => {
   });
 
   if (!latestLabel) {
-    return res.json({ warnings: ["No label exists for this SKU yet"], labelId: null, provisional: true });
+    // No label yet — check if we *can* freeze one (recipe + inventory exist)
+    const recipe = await prisma.recipe.findFirst({
+      where: { skuId: schedule.skuId!, active: true },
+      include: { lines: true },
+    });
+    if (!recipe || recipe.lines.length === 0) {
+      return res.json({ warnings: ["No active recipe with ingredients for this SKU"], labelId: null, provisional: true });
+    }
+    // Check that at least one ingredient has inventory
+    const coveredCount = await prisma.inventoryLot.count({
+      where: {
+        quantityAvailableG: { gt: 0 },
+        product: {
+          ingredientId: { in: recipe.lines.map((l) => l.ingredientId) },
+        },
+      },
+    });
+    if (coveredCount === 0) {
+      return res.json({ warnings: ["No inventory lots found for any recipe ingredient"], labelId: null, provisional: true });
+    }
+    // Everything looks good — first-time freeze will succeed, no warning needed
+    return res.json({ warnings: [], labelId: null, provisional: true });
   }
 
   const payload = (latestLabel.renderPayload ?? {}) as Record<string, unknown>;
