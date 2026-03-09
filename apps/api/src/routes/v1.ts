@@ -1257,8 +1257,10 @@ v1Router.post("/schedules/bulk-status", async (req, res) => {
 
   const freezeWarnings: string[] = [];
   let updated = 0;
+  const toFreeze: string[] = [];
 
   try {
+    // Phase 1: Update all statuses in a single transaction
     await prisma.$transaction(async (tx) => {
       for (const id of scheduleIds) {
         const schedule = await tx.mealSchedule.findUnique({ where: { id } });
@@ -1267,7 +1269,6 @@ v1Router.post("/schedules/bulk-status", async (req, res) => {
           continue;
         }
         if (schedule.status === status) {
-          // Already in the target status — idempotent, skip
           continue;
         }
 
@@ -1278,19 +1279,25 @@ v1Router.post("/schedules/bulk-status", async (req, res) => {
         updated += 1;
 
         if (status === "DONE") {
-          try {
-            await freezeLabelFromScheduleDone({
-              mealScheduleId: id,
-              servedByUserId: user.id,
-            });
-          } catch (error) {
-            freezeWarnings.push(
-              `Label freeze for ${id}: ${error instanceof Error ? error.message : "failed"}`
-            );
-          }
+          toFreeze.push(id);
         }
       }
     });
+
+    // Phase 2: Freeze labels one-by-one AFTER statuses are committed,
+    // so each freezeLabelFromScheduleDone transaction can see DONE status.
+    for (const id of toFreeze) {
+      try {
+        await freezeLabelFromScheduleDone({
+          mealScheduleId: id,
+          servedByUserId: user.id,
+        });
+      } catch (error) {
+        freezeWarnings.push(
+          `Label freeze for ${id}: ${error instanceof Error ? error.message : "failed"}`
+        );
+      }
+    }
   } catch (error) {
     return res.status(500).json({
       error: "Bulk status update failed",

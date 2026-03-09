@@ -640,9 +640,18 @@ describe("updateParLevelsBodySchema", () => {
 // ============================================================================
 
 describe("bulkScheduleStatusBodySchema", () => {
-  it("accepts valid bulk status update", () => {
+  it("accepts valid bulk status update with UUID", () => {
     const data = bulkScheduleStatusBodySchema.parse({
       scheduleIds: ["550e8400-e29b-41d4-a716-446655440000"],
+      status: "DONE",
+    });
+    expect(data.scheduleIds).toHaveLength(1);
+    expect(data.status).toBe("DONE");
+  });
+
+  it("accepts valid bulk status update with CUID", () => {
+    const data = bulkScheduleStatusBodySchema.parse({
+      scheduleIds: ["cmlx7ed0a0001p70gwxyz1234"],
       status: "DONE",
     });
     expect(data.scheduleIds).toHaveLength(1);
@@ -662,9 +671,9 @@ describe("bulkScheduleStatusBodySchema", () => {
     ).toThrow();
   });
 
-  it("rejects non-uuid scheduleIds", () => {
+  it("rejects empty string scheduleIds", () => {
     expect(() =>
-      bulkScheduleStatusBodySchema.parse({ scheduleIds: ["not-a-uuid"], status: "DONE" })
+      bulkScheduleStatusBodySchema.parse({ scheduleIds: [""], status: "DONE" })
     ).toThrow();
   });
 

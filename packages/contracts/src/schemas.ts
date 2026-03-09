@@ -159,7 +159,7 @@ export const updateScheduleStatusBodySchema = z.object({
 });
 
 export const bulkScheduleStatusBodySchema = z.object({
-  scheduleIds: z.array(z.string().uuid()).min(1).max(100),
+  scheduleIds: z.array(z.string().min(1)).min(1).max(100),
   status: z.enum(["DONE", "SKIPPED"]),
 });
 
